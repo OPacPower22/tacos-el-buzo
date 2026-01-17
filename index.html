@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>Tacos El Buzo – Sistema</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#000000" />
+
+  <!-- Estilos -->
+  <link rel="stylesheet" href="styles.css" />
+
+  <!-- jsPDF -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+</head>
+
+<body>
+
+<!-- ================= LOGIN MODAL ================= -->
+<div id="loginModal" class="modal">
+  <div class="modal-content">
+    <h2>Acceso</h2>
+    <input id="email" placeholder="Correo" />
+    <input id="pass" type="password" placeholder="Contraseña" />
+    <button onclick="login()">Entrar</button>
+  </div>
+</div>
+
+<div id="loader">Cargando…</div>
+
+<header>
+  <h1>Tacos El Buzo</h1>
+  <button onclick="logout()">Salir</button>
+</header>
+
+<!-- ================= DASHBOARD ================= -->
+<section id="dashboard">
+  <h2>Dashboard</h2>
+  <div class="kpis">
+    <div>Órdenes: <span id="kpiOrdenes">0</span></div>
+    <div>Entregadas: <span id="kpiEntregadas">0</span></div>
+    <div>Canceladas: <span id="kpiCanceladas">0</span></div>
+  </div>
+
+  <button onclick="corteDiarioManual()">Cerrar día (Corte)</button>
+  <button onclick="pdfSemanal()">PDF semanal</button>
+  <button onclick="pdfMensualActual()">PDF mensual</button>
+</section>
+
+<!-- ================= CAJA ================= -->
+<section id="vistaCaja">
+  <h2>Caja</h2>
+
+  <select id="tipo">
+    <option>Arrachera</option>
+    <option>Rib Eye</option>
+    <option>Bistec</option>
+    <option>Campechano</option>
+  </select>
+
+  <input id="cantidad" type="number" placeholder="Cantidad" />
+  <label><input type="checkbox" id="conQueso" /> Lleva queso</label>
+  <textarea id="nota" placeholder="Notas"></textarea>
+
+  <button onclick="crearOrdenDesdeUI()">Agregar orden</button>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Taco</th><th>Cant</th><th>Queso</th><th>Estatus</th><th>Acción</th>
+      </tr>
+    </thead>
+    <tbody id="tablaCaja"></tbody>
+  </table>
+</section>
+
+<!-- ================= COCINA ================= -->
+<section id="vistaCocina">
+  <h2>Modo cocina</h2>
+  <div id="listaCocina"></div>
+</section>
+
+<!-- ================= FIREBASE SDK (MODULAR) ================= -->
+<script type="module" src="app.js"></script>
+
+</body>
+</html>
