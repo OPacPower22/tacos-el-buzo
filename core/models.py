@@ -94,25 +94,33 @@ class PurchaseDetail(models.Model):
 
     def save(self, *args, **kwargs):
 
+        # SOLO ejecutar lógica si es creación
+        if self.pk:
+            raise ValueError("No se permite editar un detalle de compra.")
+
         with transaction.atomic():
 
             super().save(*args, **kwargs)
 
             ingredient = self.ingredient
 
-            # Cálculo costo promedio ponderado
             current_stock_value = ingredient.stock * ingredient.cost_per_unit
             new_stock_value = self.quantity * self.cost_per_unit
-
             total_quantity = ingredient.stock + self.quantity
 
-            if total_quantity > 0:
-                ingredient.cost_per_unit = (
-                    current_stock_value + new_stock_value
-                ) / total_quantity
+            if total_quantity <= 0:
+                raise ValueError("Cantidad inválida.")
+
+            ingredient.cost_per_unit = (
+                current_stock_value + new_stock_value
+            ) / total_quantity
 
             ingredient.stock = total_quantity
             ingredient.save()
+
+            # Actualizar total de compra
+            self.purchase.total += self.quantity * self.cost_per_unit
+            self.purchase.save()
 
 class Sale(models.Model):
 
@@ -130,6 +138,9 @@ class Sale(models.Model):
 
     def __str__(self):
         return f"Venta #{self.id} - {self.date.date()}"
+
+    def delete(self, *args, **kwargs):
+    raise ValueError("No se permite eliminar ventas registradas.")
 
 class SaleDetail(models.Model):
 
@@ -149,11 +160,18 @@ class SaleDetail(models.Model):
 
     def save(self, *args, **kwargs):
 
+        # SOLO ejecutar lógica si es creación
+        if self.pk:
+            raise ValueError("No se permite editar un detalle de venta.")
+
         with transaction.atomic():
+
+            if not self.product.recipes.exists():
+                raise ValueError("El producto no tiene receta definida.")
 
             super().save(*args, **kwargs)
 
-            total_cost = 0
+            total_cost = Decimal('0.00')
 
             for recipe in self.product.recipes.all():
 
@@ -170,12 +188,11 @@ class SaleDetail(models.Model):
 
                 total_cost += ingredient.cost_per_unit * required_qty
 
+            # Actualizar venta
             self.sale.total += self.price * self.quantity
             self.sale.cost += total_cost
             self.sale.profit = self.sale.total - self.sale.cost
             self.sale.save()
 
-
-
-
-
+    def delete(self, *args, **kwargs):
+        raise ValueError("No se permite eliminar un detalle de venta.")
