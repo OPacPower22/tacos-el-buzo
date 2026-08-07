@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Taquería POS — Control de Ventas e Inventario</title>
+<link rel="icon" type="image/png" href="logo.png">
+<link rel="apple-touch-icon" href="logo.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <img class="brand-logo" src="logo.png" alt="Logo de la taquería">
+    <div class="brand-text">
+      <h1>Taquería POS</h1>
+      <span class="brand-sub">Control de ventas e inventario</span>
+    </div>
+  </div>
+  <div class="topbar-right">
+    <span id="clock" class="clock"></span>
+    <button id="themeToggle" class="icon-btn" title="Cambiar tema" aria-label="Cambiar tema">🌗</button>
+  </div>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button class="tab-btn active" data-tab="preparar">🔥 Preparar</button>
+  <button class="tab-btn" data-tab="vender">🧾 Vender</button>
+  <button class="tab-btn" data-tab="compras">📦 Compras</button>
+  <button class="tab-btn" data-tab="inventario">📊 Inventario</button>
+  <button class="tab-btn" data-tab="reportes">📈 Reportes</button>
+  <button class="tab-btn" data-tab="config">⚙️ Configuración</button>
+</nav>
+
+<main id="app">
+
+  <!-- ================= PREPARAR ================= -->
+  <section class="tab-panel active" id="panel-preparar">
+    <div class="panel-head">
+      <h2>Preparar producto</h2>
+      <p class="hint">Elige un producto para registrar cuántas piezas preparaste y cuánta carne utilizaste. Esto resta materia prima (carne cruda y tortillas) y suma al inventario de producto listo para vender.</p>
+    </div>
+    <div class="grid-buttons" id="prepGrid"></div>
+  </section>
+
+  <!-- ================= VENDER ================= -->
+  <section class="tab-panel" id="panel-vender">
+    <div class="panel-head">
+      <h2>Registrar venta</h2>
+      <p class="hint">Elige el producto y formato vendido. Se descuenta del inventario preparado y se suma a las ventas del día.</p>
+    </div>
+    <div id="sellGrid"></div>
+    <div class="ticket-box" id="ticketBox">
+      <div class="ticket-head">
+        <h3>Ticket actual</h3>
+        <button class="btn btn-ghost" id="clearTicketBtn">Vaciar</button>
+      </div>
+      <div id="ticketItems" class="ticket-items"><p class="empty">Sin artículos todavía.</p></div>
+      <div class="ticket-total">
+        <span>Total</span>
+        <strong id="ticketTotal">$0.00</strong>
+      </div>
+      <button class="btn btn-primary btn-block" id="confirmSaleBtn" disabled>Cobrar y registrar venta</button>
+    </div>
+  </section>
+
+  <!-- ================= COMPRAS ================= -->
+  <section class="tab-panel" id="panel-compras">
+    <div class="panel-head">
+      <h2>Entradas de insumos (compras)</h2>
+      <p class="hint">Registra la llegada de carne cruda, tortillas o guacamole. Esto suma al inventario de materia prima.</p>
+    </div>
+    <form id="purchaseForm" class="form-card">
+      <div class="form-row">
+        <label for="purchaseInsumo">Insumo</label>
+        <select id="purchaseInsumo" required></select>
+      </div>
+      <div class="form-row">
+        <label for="purchaseQty">Cantidad <span id="purchaseUnit" class="unit-tag">kg</span></label>
+        <input type="number" id="purchaseQty" min="0" step="0.01" required placeholder="0.00">
+      </div>
+      <div class="form-row">
+        <label for="purchaseNote">Nota (opcional)</label>
+        <input type="text" id="purchaseNote" placeholder="Ej. proveedor, precio de compra...">
+      </div>
+      <button type="submit" class="btn btn-primary btn-block">Registrar entrada</button>
+    </form>
+    <div class="table-wrap">
+      <h3>Últimas entradas</h3>
+      <table class="data-table" id="purchaseHistory">
+        <thead><tr><th>Fecha</th><th>Insumo</th><th>Cantidad</th><th>Nota</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ================= INVENTARIO ================= -->
+  <section class="tab-panel" id="panel-inventario">
+    <div class="panel-head">
+      <h2>Inventario</h2>
+      <p class="hint">Existencias actuales de materia prima y producto preparado. Puedes hacer ajustes manuales si detectas diferencias.</p>
+    </div>
+
+    <h3 class="section-title">Materia prima</h3>
+    <div class="table-wrap">
+      <table class="data-table" id="rawInventoryTable">
+        <thead><tr><th>Insumo</th><th>Existencia</th><th>Estado</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <h3 class="section-title">Producto preparado (listo para vender)</h3>
+    <div class="table-wrap">
+      <table class="data-table" id="finishedInventoryTable">
+        <thead><tr><th>Producto</th><th>Piezas</th><th>Carne usada (aprox.)</th><th>g/pieza prom.</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ================= REPORTES ================= -->
+  <section class="tab-panel" id="panel-reportes">
+    <div class="panel-head">
+      <h2>Reportes</h2>
+    </div>
+
+    <div class="report-tabs">
+      <button class="report-tab-btn active" data-report="diario">Reporte diario</button>
+      <button class="report-tab-btn" data-report="mensual">Reporte mensual</button>
+      <button class="report-tab-btn" data-report="historial">Historial de movimientos</button>
+    </div>
+
+    <div class="report-view active" id="report-diario">
+      <div class="form-row inline">
+        <label for="dailyDate">Fecha</label>
+        <input type="date" id="dailyDate">
+      </div>
+      <div class="stat-row" id="dailyStats"></div>
+      <div class="table-wrap">
+        <h3>Ventas por producto</h3>
+        <table class="data-table" id="dailySalesTable">
+          <thead><tr><th>Producto</th><th>Formato</th><th>Cantidad</th><th>Importe</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="report-view" id="report-mensual">
+      <div class="form-row inline">
+        <label for="monthlyMonth">Mes</label>
+        <input type="month" id="monthlyMonth">
+      </div>
+      <div class="stat-row" id="monthlyStats"></div>
+      <div class="chart-wrap">
+        <h3>Ventas por día</h3>
+        <div id="monthlyChart" class="bar-chart"></div>
+      </div>
+      <div class="table-wrap">
+        <h3>Totales por producto en el mes</h3>
+        <table class="data-table" id="monthlyProductTable">
+          <thead><tr><th>Producto</th><th>Piezas/Órdenes/Kg</th><th>Importe</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="report-view" id="report-historial">
+      <div class="form-row inline">
+        <label for="historyFilter">Tipo de movimiento</label>
+        <select id="historyFilter">
+          <option value="todos">Todos</option>
+          <option value="venta">Ventas</option>
+          <option value="produccion">Producción</option>
+          <option value="compra">Compras</option>
+          <option value="ajuste">Ajustes</option>
+        </select>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table" id="historyTable">
+          <thead><tr><th>Fecha/Hora</th><th>Tipo</th><th>Detalle</th><th>Importe</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= CONFIGURACIÓN ================= -->
+  <section class="tab-panel" id="panel-config">
+    <div class="panel-head">
+      <h2>Configuración</h2>
+      <p class="hint">Ajusta precios y parámetros del negocio. Los cambios se guardan automáticamente en este dispositivo.</p>
+    </div>
+
+    <h3 class="section-title">Precios por producto y formato</h3>
+    <div class="table-wrap">
+      <table class="data-table" id="pricesTable">
+        <thead><tr><th>Producto</th><th>Pieza ($)</th><th>Orden x5 ($)</th><th>Kilo ($)</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <h3 class="section-title">Guacamole y queso extra</h3>
+    <div class="form-card">
+      <div class="form-row">
+        <label for="priceGuac">Precio orden de guacamole (150 g)</label>
+        <input type="number" id="priceGuac" min="0" step="0.5">
+      </div>
+      <div class="form-row">
+        <label for="quesoGramos">Gramos de queso por porción "con queso"</label>
+        <input type="number" id="quesoGramos" min="0" step="1">
+      </div>
+      <div class="form-row">
+        <label for="quesoPrecio">Precio extra "con queso" (por pieza)</label>
+        <input type="number" id="quesoPrecio" min="0" step="0.5">
+      </div>
+    </div>
+
+    <h3 class="section-title">Gramos de carne por pieza (referencia para ventas por kilo y sugerencia al preparar)</h3>
+    <div class="table-wrap">
+      <table class="data-table" id="gramosTable">
+        <thead><tr><th>Producto</th><th>g / pieza</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <h3 class="section-title">Campechano — mezcla por pieza</h3>
+    <p class="hint">El campechano combina longaniza y bistec en proporción distinta por pieza (no 50/50).</p>
+    <div class="form-card">
+      <div class="form-row">
+        <label for="campechanoLonganiza">Gramos de longaniza por pieza</label>
+        <input type="number" id="campechanoLonganiza" min="0" step="1">
+      </div>
+      <div class="form-row">
+        <label for="campechanoBistec">Gramos de bistec por pieza</label>
+        <input type="number" id="campechanoBistec" min="0" step="1">
+      </div>
+    </div>
+
+    <h3 class="section-title">Parámetros de conversión y alertas</h3>
+    <div class="form-card">
+      <div class="form-row">
+        <label for="gramosPorTortilla">Gramos de tortilla por pieza (taco/quesadilla)</label>
+        <input type="number" id="gramosPorTortilla" min="1" step="1">
+      </div>
+      <div class="form-row">
+        <label for="alertaStockBajo">Umbral de alerta de stock bajo — carne, guacamole, queso (kg)</label>
+        <input type="number" id="alertaStockBajo" min="0" step="0.1">
+      </div>
+      <div class="form-row">
+        <label for="alertaTortillasKg">Umbral de alerta de tortillas (kg)</label>
+        <input type="number" id="alertaTortillasKg" min="0" step="0.1">
+      </div>
+    </div>
+
+    <h3 class="section-title">Datos</h3>
+    <div class="form-card row-buttons">
+      <button class="btn btn-secondary" id="exportBtn">⬇️ Exportar respaldo (.json)</button>
+      <button class="btn btn-secondary" id="importBtn">⬆️ Importar respaldo</button>
+      <input type="file" id="importFile" accept="application/json" hidden>
+      <button class="btn btn-danger" id="resetBtn">🗑️ Reiniciar todos los datos</button>
+    </div>
+  </section>
+
+</main>
+
+<div class="modal-backdrop" id="modalBackdrop">
+  <div class="modal" id="modal"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
