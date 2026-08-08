@@ -311,6 +311,18 @@ main#app { max-width: 1100px; margin: 0 auto; padding: 20px 16px 80px; }
 .ticket-line .tl-sub { color: var(--text-muted); font-size: 11px; }
 .ticket-line .tl-remove { background: none; border: none; color: var(--status-critical); cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 6px; }
 .ticket-total { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-top: 1px solid var(--gridline); margin-bottom: 12px; font-size: 16px; }
+.edit-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: color-mix(in srgb, var(--status-warning) 18%, transparent);
+  border: 1px solid var(--status-warning);
+  border-radius: var(--radius-sm, 8px);
+  padding: 8px 10px;
+  font-size: 12px;
+  margin-bottom: 10px;
+}
 
 /* ============ Report tabs & stats ============ */
 .report-tabs { display: flex; gap: 8px; margin-bottom: 18px; flex-wrap: wrap; }
@@ -327,6 +339,24 @@ main#app { max-width: 1100px; margin: 0 auto; padding: 20px 16px 80px; }
 .report-tab-btn.active { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .report-view { display: none; }
 .report-view.active { display: block; }
+.report-toolbar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; }
+
+/* ============ Impresión de reportes (PDF vía diálogo del navegador) ============ */
+#printArea { display: none; }
+@media print {
+  body.printing > *:not(#printArea) { display: none !important; }
+  body.printing #printArea { display: block !important; }
+  #printArea { padding: 24px; color: #111; background: #fff; }
+  .print-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; border-bottom: 2px solid #111; padding-bottom: 10px; }
+  .print-header img { width: 48px; height: 48px; object-fit: contain; }
+  .print-header h1 { margin: 0; font-size: 18px; }
+  .print-stats { display: flex; gap: 14px; flex-wrap: wrap; margin: 14px 0; }
+  .print-stat { border: 1px solid #999; border-radius: 6px; padding: 8px 12px; font-size: 12px; }
+  .print-stat strong { display: block; font-size: 15px; }
+  .print-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+  .print-table th, .print-table td { border: 1px solid #999; padding: 6px 8px; text-align: left; font-size: 12px; }
+  .print-footer { margin-top: 24px; font-size: 11px; color: #555; }
+}
 
 .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 16px 0; }
 .stat-tile {

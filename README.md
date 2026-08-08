@@ -14,15 +14,22 @@ Sistema standalone (sin instalación, sin internet, sin servidor) para llevar el
 ## Pestañas del sistema
 
 - **🔥 Preparar** — botones por producto (ej. "Taco de Bistec"). Al elegir uno, capturas cuántas piezas preparaste y cuánta carne (gramos) y tortillas usaste. Esto resta de la materia prima cruda y suma al inventario de producto listo para vender.
-- **🧾 Vender** — botones por producto/formato (pieza, orden x5, kilo) y guacamole; los tacos y quesadillas se pueden marcar "con queso extra". Cada click arma un ticket; "Cobrar y registrar venta" descuenta inventario y registra la venta del día.
+- **🧾 Vender** — botones por producto y guacamole; los tacos se venden por pieza, orden (x5) o kilo, y las **quesadillas únicamente por pieza**. Tacos y quesadillas se pueden marcar "con queso extra". Cada click arma un ticket; "Cobrar y registrar venta" descuenta inventario y registra la venta del día.
 - **📦 Compras** — registra entradas de materia prima (carne cruda, tortillas, guacamole, queso) cuando llega mercancía.
-- **📊 Inventario** — existencias actuales de materia prima (kg de carne, tortillas, guacamole y queso) y de producto preparado (piezas de tacos/quesadillas por sabor, con su gramaje). Cada renglón tiene un botón "Ajustar" para corregir por conteo físico.
-- **📈 Reportes** — reporte diario (por fecha), reporte mensual (con gráfica de ventas por día) e historial completo de movimientos.
+- **📊 Inventario** — existencias actuales de materia prima (kg de carne, tortillas, guacamole y queso) y de producto preparado (piezas de tacos/quesadillas por sabor, con su gramaje). Cada renglón tiene un botón "Ajustar" para corregir por conteo físico. El inventario se actualiza automáticamente al preparar, vender, comprar, **editar o cancelar** una venta.
+- **📈 Reportes** — reporte diario (por fecha), reporte mensual (con gráfica de ventas por día) e historial completo de movimientos. Cada reporte se puede **imprimir/guardar como PDF** o **enviar por WhatsApp** con un resumen de texto. Desde el historial, cualquier venta ya cobrada se puede **editar** (cambia los artículos y ajusta el inventario) o **cancelar** (devuelve todo el inventario descontado).
 - **⚙️ Configuración** — precios por producto/formato, precio de guacamole, gramaje de queso extra, mezcla del campechano, gramos por pieza y por tortilla, y umbrales de alerta de stock bajo. También exportar/importar respaldo en `.json` y reiniciar datos.
+
+## Edición y cancelación de ventas
+
+- Desde **Reportes → Historial de movimientos**, cada venta activa tiene botones **Editar** y **Cancelar**.
+- **Editar** abre la venta en la pestaña Vender: puedes quitar artículos, agregar otros nuevos o cambiar cantidades, y "Guardar cambios de venta" reemplaza la venta original y ajusta el inventario (revierte lo descontado por la venta anterior y aplica lo nuevo). Puedes cancelar la edición sin afectar nada.
+- **Cancelar** devuelve al inventario todo lo que esa venta había descontado (piezas, carne, queso, guacamole) y marca la venta como "Cancelada" — ya no cuenta en los reportes de ventas, pero queda en el historial para auditoría.
+- Las ventas registradas antes de esta función siguen pudiéndose editar/cancelar; como no guardaban el detalle exacto de lo descontado, el sistema usa el promedio actual de gramaje como mejor aproximación al revertir el inventario.
 
 ## Supuestos de diseño (ajustables en Configuración o pidiendo cambios)
 
-- **Quesadillas** se venden en los mismos 3 formatos que los tacos: pieza, orden (x5) y kilo, y usan el mismo gramaje de carne por pieza que el taco del mismo producto.
+- **Quesadillas** se venden únicamente **por pieza** (no por orden x5 ni por kilo), y usan el mismo gramaje de carne por pieza que el taco del mismo producto.
 - **Gramos de carne por pieza** (Configuración → "Gramos de carne por pieza"): valores tomados del registro real de operación — bistec y longaniza 61 g, arrachera y rib eye 41 g.
 - **Campechano** no tiene materia prima propia: al preparar campechano, la carne se descuenta según la mezcla configurada (Configuración → "Campechano — mezcla por pieza"), por defecto 41 g de longaniza + 31 g de bistec por pieza.
 - **Queso extra**: al vender, se puede marcar "Con queso extra" — suma el precio configurado por pieza y descuenta queso rallado del inventario (por defecto 61 g y $10 por pieza).

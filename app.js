@@ -25,6 +25,11 @@ const FORMATOS = [
   { id: 'kilo',   name: 'Kilo',       unit: 'kg',   step: 0.1,  def: 0.5 },
 ];
 
+// Las quesadillas se venden únicamente por pieza (no por orden x5 ni por kilo).
+function formatosForTipo(tipoId) {
+  return tipoId === 'quesadilla' ? FORMATOS.filter(fo => fo.id === 'pieza') : FORMATOS;
+}
+
 const INSUMOS = [
   { id: 'bistec',    label: 'Bistec crudo',    unit: 'kg' },
   { id: 'longaniza', label: 'Longaniza cruda', unit: 'kg' },
@@ -39,7 +44,14 @@ const INSUMOS = [
 // (igual que el guacamole), para tener precisión pieza a pieza.
 const GRAM_BASED_INSUMOS = ['guacamole', 'tortillas', 'queso'];
 
-const MOVEMENT_LABELS = { compra: 'Compra', produccion: 'Producción', venta: 'Venta', ajuste: 'Ajuste' };
+const MOVEMENT_LABELS = {
+  compra: 'Compra',
+  produccion: 'Producción',
+  venta: 'Venta',
+  ajuste: 'Ajuste',
+  edicion_venta: 'Edición de venta',
+  cancelacion_venta: 'Cancelación de venta',
+};
 
 /* ======================================================================
    ESTADO Y PERSISTENCIA
@@ -204,15 +216,36 @@ function computeSaleItemImpact(item) {
 }
 
 function applySaleItem(item) {
+  // Aplica el impacto en inventario y lo guarda en el propio item (item.impact),
+  // para poder revertirlo con exactitud si la venta se edita o cancela después,
+  // sin depender de promedios que pueden cambiar con ventas posteriores.
   if (item.protein === 'guacamole') {
-    STATE.raw.guacamole -= item.cantidad * 150;
-    return;
+    const impact = { gramos: item.cantidad * 150 };
+    STATE.raw.guacamole -= impact.gramos;
+    item.impact = impact;
+    return impact;
   }
   const impact = computeSaleItemImpact(item);
   const f = STATE.finished[item.protein][item.tipo];
   f.piezas -= impact.piezas;
   f.gramos -= impact.gramos;
   if (impact.quesoGramos) STATE.raw.queso -= impact.quesoGramos;
+  item.impact = impact;
+  return impact;
+}
+
+function reverseSaleItemImpact(item) {
+  // Ventas registradas antes de esta versión no traen "impact" guardado;
+  // en ese caso se recalcula con los promedios actuales como mejor aproximación.
+  const impact = item.impact || computeSaleItemImpact(item);
+  if (item.protein === 'guacamole') {
+    STATE.raw.guacamole += impact.gramos;
+    return;
+  }
+  const f = STATE.finished[item.protein][item.tipo];
+  f.piezas += impact.piezas;
+  f.gramos += impact.gramos;
+  if (impact.quesoGramos) STATE.raw.queso += impact.quesoGramos;
 }
 
 function applyPurchase(insumoId, cantidad) {
@@ -329,7 +362,7 @@ function renderSellGrid() {
     const cards = PROTEINS.map(p => {
       const f = STATE.finished[p.id][t.id];
       const low = f.piezas <= 0;
-      const buttons = FORMATOS.map(fo => {
+      const buttons = formatosForTipo(t.id).map(fo => {
         const price = STATE.prices[p.id][t.id][fo.id];
         return `<button class="btn btn-sm" data-action="sell" data-protein="${p.id}" data-tipo="${t.id}" data-formato="${fo.id}">${fo.name}<br><span class="field-hint">${money(price)}</span></button>`;
       }).join('');
@@ -455,6 +488,14 @@ function renderTicket() {
   const itemsEl = document.getElementById('ticketItems');
   const totalEl = document.getElementById('ticketTotal');
   const confirmBtn = document.getElementById('confirmSaleBtn');
+  const editBanner = document.getElementById('editBanner');
+  if (EDITING_SALE_ID) {
+    editBanner.style.display = 'flex';
+    confirmBtn.textContent = 'Guardar cambios de venta';
+  } else {
+    editBanner.style.display = 'none';
+    confirmBtn.textContent = 'Cobrar y registrar venta';
+  }
   if (TICKET.length === 0) {
     itemsEl.innerHTML = '<p class="empty">Sin artículos todavía.</p>';
   } else {
@@ -479,13 +520,99 @@ function confirmSale() {
   if (TICKET.length === 0) return;
   TICKET.forEach(applySaleItem);
   const total = TICKET.reduce((s, it) => s + it.subtotal, 0);
-  pushMovement('venta', { items: TICKET.map(({ protein, tipo, formato, cantidad, precioUnit, subtotal, label }) => ({ protein, tipo, formato, cantidad, precioUnit, subtotal, label })), total });
+  pushMovement('venta', { items: TICKET.map(({ protein, tipo, formato, cantidad, precioUnit, conQueso, subtotal, label, impact }) => ({ protein, tipo, formato, cantidad, precioUnit, conQueso, subtotal, label, impact })), total });
   save();
   toast(`Venta registrada por ${money(total)}`);
   TICKET = [];
   renderTicket();
   renderSellGrid();
   renderInventory();
+}
+
+/* ---- Edición y cancelación de ventas ya registradas ---- */
+let EDITING_SALE_ID = null;
+
+function findSale(id) {
+  return STATE.movements.find(m => m.id === id && m.type === 'venta');
+}
+
+function startEditSale(id) {
+  const sale = findSale(id);
+  if (!sale) return;
+  if (sale.cancelled) { toast('Esta venta está cancelada y no se puede editar'); return; }
+  EDITING_SALE_ID = id;
+  TICKET = sale.items.map(it => ({ ...it, id: uid() }));
+  document.querySelector('.tab-btn[data-tab="vender"]').click();
+  renderTicket();
+  toast('Editando venta: modifica los artículos y presiona "Guardar cambios"');
+}
+
+function cancelEditSale() {
+  EDITING_SALE_ID = null;
+  TICKET = [];
+  renderTicket();
+}
+
+function saveEditedSale() {
+  const sale = findSale(EDITING_SALE_ID);
+  if (!sale) { cancelEditSale(); return; }
+  if (TICKET.length === 0) {
+    toast('Una venta no puede quedar sin artículos. Usa "Cancelar edición" y luego "Cancelar venta" si quieres eliminarla.');
+    return;
+  }
+  // Revierte el impacto original y aplica el de los artículos editados.
+  sale.items.forEach(reverseSaleItemImpact);
+  TICKET.forEach(applySaleItem);
+  const total = TICKET.reduce((s, it) => s + it.subtotal, 0);
+  sale.items = TICKET.map(({ protein, tipo, formato, cantidad, precioUnit, conQueso, subtotal, label, impact }) => ({ protein, tipo, formato, cantidad, precioUnit, conQueso, subtotal, label, impact }));
+  sale.total = total;
+  sale.editedAt = Date.now();
+  pushMovement('edicion_venta', { saleId: sale.id, total });
+  save();
+  toast('Venta actualizada e inventario ajustado');
+  EDITING_SALE_ID = null;
+  TICKET = [];
+  renderTicket();
+  renderSellGrid();
+  renderInventory();
+  renderDailyReport();
+  renderMonthlyReport();
+  renderHistory();
+}
+
+function requestCancelSale(id) {
+  const sale = findSale(id);
+  if (!sale) return;
+  if (sale.cancelled) { toast('Esta venta ya está cancelada'); return; }
+  const html = `
+    <h3>¿Cancelar esta venta?</h3>
+    <p class="modal-sub">Venta del ${fmtDateTime(sale.ts)} por ${money(sale.total)}. Se devolverá al inventario todo lo que se descontó en esta venta.</p>
+    <div class="form-row">
+      <label for="cancelSaleNote">Motivo (opcional)</label>
+      <input type="text" id="cancelSaleNote" placeholder="Ej. error de captura, cliente canceló...">
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="cancelSaleBack">Regresar</button>
+      <button class="btn btn-danger" id="cancelSaleConfirm">Sí, cancelar venta</button>
+    </div>`;
+  openModal(html, root => {
+    root.querySelector('#cancelSaleBack').addEventListener('click', closeModal);
+    root.querySelector('#cancelSaleConfirm').addEventListener('click', () => {
+      const nota = root.querySelector('#cancelSaleNote').value.trim();
+      sale.items.forEach(reverseSaleItemImpact);
+      sale.cancelled = true;
+      sale.canceledAt = Date.now();
+      pushMovement('cancelacion_venta', { saleId: sale.id, total: sale.total, nota });
+      save();
+      toast('Venta cancelada e inventario devuelto');
+      closeModal();
+      renderSellGrid();
+      renderInventory();
+      renderDailyReport();
+      renderMonthlyReport();
+      renderHistory();
+    });
+  });
 }
 
 /* ======================================================================
@@ -664,34 +791,32 @@ function movementDetailText(m) {
     return `${m.piezas} ${t.name.toLowerCase()}(s) de ${p.name} · ${num(m.gramos)} g carne · ${m.tortillas} tortillas`;
   }
   if (m.type === 'venta') {
-    return m.items.map(it => `${it.cantidad}× ${it.label}`).join(', ');
+    const detail = m.items.map(it => `${it.cantidad}× ${it.label}`).join(', ');
+    const tags = [m.cancelled ? 'CANCELADA' : null, m.editedAt ? 'editada' : null].filter(Boolean).join(', ');
+    return tags ? `${detail} (${tags})` : detail;
   }
   if (m.type === 'ajuste') {
     return m.target === 'raw'
       ? `${m.key}: nuevo valor ${num(m.nuevo, 2)} (${m.delta >= 0 ? '+' : ''}${num(m.delta, 2)})${m.nota ? ' — ' + m.nota : ''}`
       : `${m.key.replace('|', ' / ')}: piezas ${m.deltaPiezas >= 0 ? '+' : ''}${m.deltaPiezas}, gramos ${m.deltaGramos >= 0 ? '+' : ''}${num(m.deltaGramos)}${m.nota ? ' — ' + m.nota : ''}`;
   }
+  if (m.type === 'edicion_venta') {
+    return `Venta editada · nuevo total ${money(m.total)}`;
+  }
+  if (m.type === 'cancelacion_venta') {
+    return `Venta cancelada · ${money(m.total)}${m.nota ? ' — ' + m.nota : ''}`;
+  }
   return '';
 }
 
-function renderDailyReport() {
-  const dateInput = document.getElementById('dailyDate');
-  const date = dateInput.value || todayStr();
-  dateInput.value = date;
-  const ventasDelDia = STATE.movements.filter(m => m.type === 'venta' && todayStr(new Date(m.ts)) === date);
+function getDailyReportData(date) {
+  const ventasDelDia = STATE.movements.filter(m => m.type === 'venta' && !m.cancelled && todayStr(new Date(m.ts)) === date);
   const produccionDelDia = STATE.movements.filter(m => m.type === 'produccion' && todayStr(new Date(m.ts)) === date);
 
   const totalVendido = ventasDelDia.reduce((s, m) => s + m.total, 0);
   const totalPiezasVendidas = ventasDelDia.reduce((s, m) => s + m.items.reduce((s2, it) => s2 + (it.protein === 'guacamole' ? 0 : it.cantidad), 0), 0);
   const totalCarnePreparada = produccionDelDia.reduce((s, m) => s + m.gramos, 0);
   const totalTicketsCount = ventasDelDia.length;
-
-  document.getElementById('dailyStats').innerHTML = `
-    <div class="stat-tile"><div class="st-label">Ventas totales</div><div class="st-value">${money(totalVendido)}</div></div>
-    <div class="stat-tile"><div class="st-label">Tickets cobrados</div><div class="st-value">${num(totalTicketsCount)}</div></div>
-    <div class="stat-tile"><div class="st-label">Piezas / porciones vendidas</div><div class="st-value">${num(totalPiezasVendidas)}</div></div>
-    <div class="stat-tile"><div class="st-label">Carne preparada</div><div class="st-value">${num(totalCarnePreparada / 1000, 2)} kg</div></div>
-  `;
 
   const agg = {};
   ventasDelDia.forEach(m => m.items.forEach(it => {
@@ -701,17 +826,31 @@ function renderDailyReport() {
     agg[key].importe += it.subtotal;
   }));
   const rows = Object.values(agg).sort((a, b) => b.importe - a.importe);
+
+  return { date, totalVendido, totalPiezasVendidas, totalCarnePreparada, totalTicketsCount, rows };
+}
+
+function renderDailyReport() {
+  const dateInput = document.getElementById('dailyDate');
+  const date = dateInput.value || todayStr();
+  dateInput.value = date;
+  const data = getDailyReportData(date);
+
+  document.getElementById('dailyStats').innerHTML = `
+    <div class="stat-tile"><div class="st-label">Ventas totales</div><div class="st-value">${money(data.totalVendido)}</div></div>
+    <div class="stat-tile"><div class="st-label">Tickets cobrados</div><div class="st-value">${num(data.totalTicketsCount)}</div></div>
+    <div class="stat-tile"><div class="st-label">Piezas / porciones vendidas</div><div class="st-value">${num(data.totalPiezasVendidas)}</div></div>
+    <div class="stat-tile"><div class="st-label">Carne preparada</div><div class="st-value">${num(data.totalCarnePreparada / 1000, 2)} kg</div></div>
+  `;
+
   const tbody = document.querySelector('#dailySalesTable tbody');
-  tbody.innerHTML = rows.length ? rows.map(r => `
+  tbody.innerHTML = data.rows.length ? data.rows.map(r => `
     <tr><td>${r.label}</td><td>${formatoById(r.formato)?.name || (r.formato === 'orden' ? 'Orden 150g' : r.formato)}</td><td>${num(r.cantidad, 2)}</td><td>${money(r.importe)}</td></tr>
   `).join('') : '<tr><td colspan="4" class="field-hint">Sin ventas en esta fecha.</td></tr>';
 }
 
-function renderMonthlyReport() {
-  const monthInput = document.getElementById('monthlyMonth');
-  const month = monthInput.value || monthStr();
-  monthInput.value = month;
-  const ventasDelMes = STATE.movements.filter(m => m.type === 'venta' && monthStr(new Date(m.ts)) === month);
+function getMonthlyReportData(month) {
+  const ventasDelMes = STATE.movements.filter(m => m.type === 'venta' && !m.cancelled && monthStr(new Date(m.ts)) === month);
 
   const totalMes = ventasDelMes.reduce((s, m) => s + m.total, 0);
   const [y, mo] = month.split('-').map(Number);
@@ -726,21 +865,6 @@ function renderMonthlyReport() {
   const maxDia = porDia.reduce((best, v, i) => v > best.v ? { v, i } : best, { v: 0, i: -1 });
   const totalPiezas = ventasDelMes.reduce((s, m) => s + m.items.reduce((s2, it) => s2 + (it.protein === 'guacamole' ? 0 : it.cantidad), 0), 0);
 
-  document.getElementById('monthlyStats').innerHTML = `
-    <div class="stat-tile"><div class="st-label">Ventas del mes</div><div class="st-value">${money(totalMes)}</div></div>
-    <div class="stat-tile"><div class="st-label">Promedio diario (días con venta)</div><div class="st-value">${money(promedioDiario)}</div></div>
-    <div class="stat-tile"><div class="st-label">Mejor día</div><div class="st-value">${maxDia.i >= 0 ? `Día ${maxDia.i + 1} — ${money(maxDia.v)}` : '—'}</div></div>
-    <div class="stat-tile"><div class="st-label">Piezas / porciones vendidas</div><div class="st-value">${num(totalPiezas)}</div></div>
-  `;
-
-  const maxVal = Math.max(...porDia, 1);
-  document.getElementById('monthlyChart').innerHTML = porDia.map((v, i) => `
-    <div class="bar-col">
-      <div class="bar-tip">Día ${i + 1}: ${money(v)}</div>
-      <div class="bar" style="height:${Math.max(2, (v / maxVal) * 100)}%"></div>
-      <div class="bar-day-label">${i + 1}</div>
-    </div>`).join('');
-
   const agg = {};
   ventasDelMes.forEach(m => m.items.forEach(it => {
     if (!agg[it.label]) agg[it.label] = { label: it.label, cantidad: 0, importe: 0 };
@@ -748,8 +872,33 @@ function renderMonthlyReport() {
     agg[it.label].importe += it.subtotal;
   }));
   const rows = Object.values(agg).sort((a, b) => b.importe - a.importe);
-  document.querySelector('#monthlyProductTable tbody').innerHTML = rows.length
-    ? rows.map(r => `<tr><td>${r.label}</td><td>${num(r.cantidad, 2)}</td><td>${money(r.importe)}</td></tr>`).join('')
+
+  return { month, totalMes, porDia, diasConVenta, promedioDiario, maxDia, totalPiezas, rows };
+}
+
+function renderMonthlyReport() {
+  const monthInput = document.getElementById('monthlyMonth');
+  const month = monthInput.value || monthStr();
+  monthInput.value = month;
+  const data = getMonthlyReportData(month);
+
+  document.getElementById('monthlyStats').innerHTML = `
+    <div class="stat-tile"><div class="st-label">Ventas del mes</div><div class="st-value">${money(data.totalMes)}</div></div>
+    <div class="stat-tile"><div class="st-label">Promedio diario (días con venta)</div><div class="st-value">${money(data.promedioDiario)}</div></div>
+    <div class="stat-tile"><div class="st-label">Mejor día</div><div class="st-value">${data.maxDia.i >= 0 ? `Día ${data.maxDia.i + 1} — ${money(data.maxDia.v)}` : '—'}</div></div>
+    <div class="stat-tile"><div class="st-label">Piezas / porciones vendidas</div><div class="st-value">${num(data.totalPiezas)}</div></div>
+  `;
+
+  const maxVal = Math.max(...data.porDia, 1);
+  document.getElementById('monthlyChart').innerHTML = data.porDia.map((v, i) => `
+    <div class="bar-col">
+      <div class="bar-tip">Día ${i + 1}: ${money(v)}</div>
+      <div class="bar" style="height:${Math.max(2, (v / maxVal) * 100)}%"></div>
+      <div class="bar-day-label">${i + 1}</div>
+    </div>`).join('');
+
+  document.querySelector('#monthlyProductTable tbody').innerHTML = data.rows.length
+    ? data.rows.map(r => `<tr><td>${r.label}</td><td>${num(r.cantidad, 2)}</td><td>${money(r.importe)}</td></tr>`).join('')
     : '<tr><td colspan="3" class="field-hint">Sin ventas en este mes.</td></tr>';
 }
 
@@ -761,13 +910,148 @@ function renderHistory() {
     .reverse()
     .slice(0, 200);
   const tbody = document.querySelector('#historyTable tbody');
-  tbody.innerHTML = rows.length ? rows.map(m => `
+  tbody.innerHTML = rows.length ? rows.map(m => {
+    let actions = '';
+    if (m.type === 'venta') {
+      actions = m.cancelled
+        ? '<span class="tag critical">Cancelada</span>'
+        : `<button class="btn btn-ghost btn-sm" data-edit-sale="${m.id}">Editar</button> <button class="btn btn-ghost btn-sm" data-cancel-sale="${m.id}">Cancelar</button>`;
+    }
+    return `
     <tr>
       <td>${fmtDateTime(m.ts)}</td>
       <td><span class="tag good">${MOVEMENT_LABELS[m.type]}</span></td>
       <td>${movementDetailText(m)}</td>
       <td>${m.type === 'venta' ? money(m.total) : ''}</td>
-    </tr>`).join('') : '<tr><td colspan="4" class="field-hint">Sin movimientos.</td></tr>';
+      <td>${actions}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="5" class="field-hint">Sin movimientos.</td></tr>';
+}
+
+/* ======================================================================
+   IMPRESIÓN (PDF) Y ENVÍO POR WHATSAPP DE REPORTES
+   ====================================================================== */
+function printHtml(title, bodyHtml) {
+  return `
+    <div class="print-header">
+      <img src="logo.png" alt="Logo">
+      <div>
+        <h1>Taquería POS</h1>
+        <div>${title}</div>
+      </div>
+    </div>
+    ${bodyHtml}
+    <div class="print-footer">Generado el ${fmtDateTime(Date.now())}</div>
+  `;
+}
+
+function printReport(innerHtml) {
+  const area = document.getElementById('printArea');
+  area.innerHTML = innerHtml;
+  document.body.classList.add('printing');
+  window.print();
+}
+
+window.addEventListener('afterprint', () => {
+  document.body.classList.remove('printing');
+  const area = document.getElementById('printArea');
+  if (area) area.innerHTML = '';
+});
+
+function openWhatsApp(text) {
+  window.open(`https://wa.me/?text=${encodeURIComponent(text)}`, '_blank');
+}
+
+function printDailyReport() {
+  const date = document.getElementById('dailyDate').value || todayStr();
+  const data = getDailyReportData(date);
+  const rowsHtml = data.rows.length
+    ? data.rows.map(r => `<tr><td>${r.label}</td><td>${formatoById(r.formato)?.name || (r.formato === 'orden' ? 'Orden 150g' : r.formato)}</td><td>${num(r.cantidad, 2)}</td><td>${money(r.importe)}</td></tr>`).join('')
+    : '<tr><td colspan="4">Sin ventas en esta fecha.</td></tr>';
+  const html = printHtml(`Reporte diario — ${data.date}`, `
+    <div class="print-stats">
+      <div class="print-stat"><strong>${money(data.totalVendido)}</strong><span>Ventas totales</span></div>
+      <div class="print-stat"><strong>${num(data.totalTicketsCount)}</strong><span>Tickets cobrados</span></div>
+      <div class="print-stat"><strong>${num(data.totalPiezasVendidas)}</strong><span>Piezas vendidas</span></div>
+      <div class="print-stat"><strong>${num(data.totalCarnePreparada / 1000, 2)} kg</strong><span>Carne preparada</span></div>
+    </div>
+    <table class="print-table"><thead><tr><th>Producto</th><th>Formato</th><th>Cantidad</th><th>Importe</th></tr></thead><tbody>${rowsHtml}</tbody></table>
+  `);
+  printReport(html);
+}
+
+function shareDailyReportWhatsApp() {
+  const date = document.getElementById('dailyDate').value || todayStr();
+  const data = getDailyReportData(date);
+  const lines = [
+    `📋 *Reporte diario — ${data.date}*`,
+    `💰 Ventas totales: ${money(data.totalVendido)}`,
+    `🧾 Tickets cobrados: ${num(data.totalTicketsCount)}`,
+    `🌮 Piezas/porciones vendidas: ${num(data.totalPiezasVendidas)}`,
+    `🥩 Carne preparada: ${num(data.totalCarnePreparada / 1000, 2)} kg`,
+    '',
+    '*Ventas por producto:*',
+    ...(data.rows.length
+      ? data.rows.map(r => `• ${r.label} x${num(r.cantidad, 2)} — ${money(r.importe)}`)
+      : ['Sin ventas en esta fecha.']),
+  ];
+  openWhatsApp(lines.join('\n'));
+}
+
+function printMonthlyReport() {
+  const month = document.getElementById('monthlyMonth').value || monthStr();
+  const data = getMonthlyReportData(month);
+  const rowsHtml = data.rows.length
+    ? data.rows.map(r => `<tr><td>${r.label}</td><td>${num(r.cantidad, 2)}</td><td>${money(r.importe)}</td></tr>`).join('')
+    : '<tr><td colspan="3">Sin ventas en este mes.</td></tr>';
+  const html = printHtml(`Reporte mensual — ${data.month}`, `
+    <div class="print-stats">
+      <div class="print-stat"><strong>${money(data.totalMes)}</strong><span>Ventas del mes</span></div>
+      <div class="print-stat"><strong>${money(data.promedioDiario)}</strong><span>Promedio diario</span></div>
+      <div class="print-stat"><strong>${data.maxDia.i >= 0 ? `Día ${data.maxDia.i + 1} — ${money(data.maxDia.v)}` : '—'}</strong><span>Mejor día</span></div>
+      <div class="print-stat"><strong>${num(data.totalPiezas)}</strong><span>Piezas vendidas</span></div>
+    </div>
+    <table class="print-table"><thead><tr><th>Producto</th><th>Cantidad</th><th>Importe</th></tr></thead><tbody>${rowsHtml}</tbody></table>
+  `);
+  printReport(html);
+}
+
+function shareMonthlyReportWhatsApp() {
+  const month = document.getElementById('monthlyMonth').value || monthStr();
+  const data = getMonthlyReportData(month);
+  const lines = [
+    `📈 *Reporte mensual — ${data.month}*`,
+    `💰 Ventas del mes: ${money(data.totalMes)}`,
+    `📊 Promedio diario: ${money(data.promedioDiario)}`,
+    `🏆 Mejor día: ${data.maxDia.i >= 0 ? `Día ${data.maxDia.i + 1} — ${money(data.maxDia.v)}` : '—'}`,
+    `🌮 Piezas/porciones vendidas: ${num(data.totalPiezas)}`,
+    '',
+    '*Totales por producto:*',
+    ...(data.rows.length
+      ? data.rows.map(r => `• ${r.label} x${num(r.cantidad, 2)} — ${money(r.importe)}`)
+      : ['Sin ventas en este mes.']),
+  ];
+  openWhatsApp(lines.join('\n'));
+}
+
+function printHistoryReport() {
+  const filter = document.getElementById('historyFilter').value;
+  const rows = STATE.movements.filter(m => filter === 'todos' || m.type === filter).slice().reverse().slice(0, 200);
+  const rowsHtml = rows.length
+    ? rows.map(m => `<tr><td>${fmtDateTime(m.ts)}</td><td>${MOVEMENT_LABELS[m.type]}</td><td>${movementDetailText(m)}</td><td>${m.type === 'venta' ? money(m.total) : ''}</td></tr>`).join('')
+    : '<tr><td colspan="4">Sin movimientos.</td></tr>';
+  const html = printHtml('Historial de movimientos', `<table class="print-table"><thead><tr><th>Fecha</th><th>Tipo</th><th>Detalle</th><th>Importe</th></tr></thead><tbody>${rowsHtml}</tbody></table>`);
+  printReport(html);
+}
+
+function shareHistoryReportWhatsApp() {
+  const filter = document.getElementById('historyFilter').value;
+  const rows = STATE.movements.filter(m => filter === 'todos' || m.type === filter).slice().reverse().slice(0, 30);
+  const lines = [
+    '📋 *Historial de movimientos (últimos 30)*',
+    ...(rows.length ? rows.map(m => `• ${fmtDateTime(m.ts)} — ${MOVEMENT_LABELS[m.type]}: ${movementDetailText(m)}`) : ['Sin movimientos.']),
+  ];
+  openWhatsApp(lines.join('\n'));
 }
 
 /* ======================================================================
@@ -778,12 +1062,13 @@ function renderPricesTable() {
   const rows = [];
   PROTEINS.forEach(p => TIPOS.forEach(t => {
     const price = STATE.prices[p.id][t.id];
+    const soloPieza = t.id === 'quesadilla';
     rows.push(`
       <tr>
         <td>${t.icon} ${t.name} — ${p.name}</td>
         <td><input type="number" step="0.5" min="0" value="${price.pieza}" data-price="${p.id}|${t.id}|pieza" style="width:90px"></td>
-        <td><input type="number" step="0.5" min="0" value="${price.orden5}" data-price="${p.id}|${t.id}|orden5" style="width:90px"></td>
-        <td><input type="number" step="0.5" min="0" value="${price.kilo}" data-price="${p.id}|${t.id}|kilo" style="width:90px"></td>
+        <td>${soloPieza ? '<span class="field-hint">— (solo pieza)</span>' : `<input type="number" step="0.5" min="0" value="${price.orden5}" data-price="${p.id}|${t.id}|orden5" style="width:90px">`}</td>
+        <td>${soloPieza ? '<span class="field-hint">— (solo pieza)</span>' : `<input type="number" step="0.5" min="0" value="${price.kilo}" data-price="${p.id}|${t.id}|kilo" style="width:90px">`}</td>
       </tr>`);
   }));
   tbody.innerHTML = rows.join('');
@@ -934,9 +1219,20 @@ function initEvents() {
     if (rm) { TICKET = TICKET.filter(it => it.id !== rm.dataset.remove); renderTicket(); }
   });
   document.getElementById('clearTicketBtn').addEventListener('click', () => { TICKET = []; renderTicket(); });
-  document.getElementById('confirmSaleBtn').addEventListener('click', confirmSale);
+  document.getElementById('confirmSaleBtn').addEventListener('click', () => {
+    if (EDITING_SALE_ID) saveEditedSale();
+    else confirmSale();
+  });
+  document.getElementById('cancelEditBtn').addEventListener('click', cancelEditSale);
 
   document.getElementById('purchaseForm').addEventListener('submit', handlePurchaseSubmit);
+
+  document.getElementById('historyTable').addEventListener('click', e => {
+    const editBtn = e.target.closest('[data-edit-sale]');
+    if (editBtn) { startEditSale(editBtn.dataset.editSale); return; }
+    const cancelBtn = e.target.closest('[data-cancel-sale]');
+    if (cancelBtn) requestCancelSale(cancelBtn.dataset.cancelSale);
+  });
 
   document.getElementById('rawInventoryTable').addEventListener('click', e => {
     const btn = e.target.closest('[data-adjust-raw]');
@@ -950,6 +1246,20 @@ function initEvents() {
   document.getElementById('dailyDate').addEventListener('change', renderDailyReport);
   document.getElementById('monthlyMonth').addEventListener('change', renderMonthlyReport);
   document.getElementById('historyFilter').addEventListener('change', renderHistory);
+
+  document.getElementById('panel-reportes').addEventListener('click', e => {
+    const btn = e.target.closest('[data-report-action]');
+    if (!btn) return;
+    const actions = {
+      'print-diario': printDailyReport,
+      'whatsapp-diario': shareDailyReportWhatsApp,
+      'print-mensual': printMonthlyReport,
+      'whatsapp-mensual': shareMonthlyReportWhatsApp,
+      'print-historial': printHistoryReport,
+      'whatsapp-historial': shareHistoryReportWhatsApp,
+    };
+    actions[btn.dataset.reportAction]?.();
+  });
 
   bindConfigInputs();
 }

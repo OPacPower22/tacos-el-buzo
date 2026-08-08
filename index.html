@@ -56,6 +56,10 @@
         <h3>Ticket actual</h3>
         <button class="btn btn-ghost" id="clearTicketBtn">Vaciar</button>
       </div>
+      <div id="editBanner" class="edit-banner" style="display:none">
+        <span>✏️ Editando una venta ya cobrada. Al guardar, se reemplaza la venta original y se ajusta el inventario.</span>
+        <button class="btn btn-ghost btn-sm" id="cancelEditBtn">Cancelar edición</button>
+      </div>
       <div id="ticketItems" class="ticket-items"><p class="empty">Sin artículos todavía.</p></div>
       <div class="ticket-total">
         <span>Total</span>
@@ -136,6 +140,10 @@
         <label for="dailyDate">Fecha</label>
         <input type="date" id="dailyDate">
       </div>
+      <div class="report-toolbar">
+        <button class="btn btn-secondary" data-report-action="print-diario">🖨️ Imprimir / PDF</button>
+        <button class="btn btn-secondary" data-report-action="whatsapp-diario">📲 Enviar por WhatsApp</button>
+      </div>
       <div class="stat-row" id="dailyStats"></div>
       <div class="table-wrap">
         <h3>Ventas por producto</h3>
@@ -150,6 +158,10 @@
       <div class="form-row inline">
         <label for="monthlyMonth">Mes</label>
         <input type="month" id="monthlyMonth">
+      </div>
+      <div class="report-toolbar">
+        <button class="btn btn-secondary" data-report-action="print-mensual">🖨️ Imprimir / PDF</button>
+        <button class="btn btn-secondary" data-report-action="whatsapp-mensual">📲 Enviar por WhatsApp</button>
       </div>
       <div class="stat-row" id="monthlyStats"></div>
       <div class="chart-wrap">
@@ -176,9 +188,13 @@
           <option value="ajuste">Ajustes</option>
         </select>
       </div>
+      <div class="report-toolbar">
+        <button class="btn btn-secondary" data-report-action="print-historial">🖨️ Imprimir / PDF</button>
+        <button class="btn btn-secondary" data-report-action="whatsapp-historial">📲 Enviar por WhatsApp</button>
+      </div>
       <div class="table-wrap">
         <table class="data-table" id="historyTable">
-          <thead><tr><th>Fecha/Hora</th><th>Tipo</th><th>Detalle</th><th>Importe</th></tr></thead>
+          <thead><tr><th>Fecha/Hora</th><th>Tipo</th><th>Detalle</th><th>Importe</th><th>Acciones</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -269,6 +285,8 @@
 </div>
 
 <div class="toast" id="toast"></div>
+
+<div id="printArea"></div>
 
 <script src="app.js"></script>
 </body>
