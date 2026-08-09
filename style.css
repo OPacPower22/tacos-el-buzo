@@ -310,6 +310,21 @@ main#app { max-width: 1100px; margin: 0 auto; padding: 20px 16px 80px; }
 .ticket-line .tl-name { font-weight: 600; }
 .ticket-line .tl-sub { color: var(--text-muted); font-size: 11px; }
 .ticket-line .tl-remove { background: none; border: none; color: var(--status-critical); cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 6px; }
+.ticket-subtotal { display: flex; align-items: center; justify-content: space-between; padding: 4px 0; font-size: 13px; color: var(--text-muted); }
+.ticket-discount-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  margin: 6px 0;
+  background: color-mix(in srgb, var(--status-good) 12%, transparent);
+  border: 1px solid var(--status-good);
+  border-radius: var(--radius-sm, 8px);
+  font-size: 13px;
+}
+.ticket-discount-row .tl-remove { background: none; border: none; color: var(--status-critical); cursor: pointer; font-size: 16px; line-height: 1; padding: 2px 6px; }
+#addDiscountBtn { margin: 6px 0; }
 .ticket-total { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-top: 1px solid var(--gridline); margin-bottom: 12px; font-size: 16px; }
 .edit-banner {
   display: flex;

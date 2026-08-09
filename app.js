@@ -53,6 +53,9 @@ const MOVEMENT_LABELS = {
   cancelacion_venta: 'Cancelación de venta',
 };
 
+// Tortillas físicas usadas por pieza (no confundir con los gramos de una tortilla).
+const TORTILLAS_POR_TIPO_DEFAULT = { taco: 2, quesadilla: 1 };
+
 /* ======================================================================
    ESTADO Y PERSISTENCIA
    ====================================================================== */
@@ -69,26 +72,24 @@ function defaultPricesForProtein(id) {
 
 function defaultState() {
   const prices = {};
-  const finished = {};
-  PROTEINS.forEach(p => {
-    prices[p.id] = defaultPricesForProtein(p.id);
-    finished[p.id] = { taco: { piezas: 0, gramos: 0 }, quesadilla: { piezas: 0, gramos: 0 } };
-  });
+  PROTEINS.forEach(p => { prices[p.id] = defaultPricesForProtein(p.id); });
   return {
     // tortillas y queso se guardan en gramos (como el guacamole); se compran por kg.
     raw: { bistec: 5, longaniza: 5, arrachera: 3, ribeye: 2, tortillas: 10200, guacamole: 1500, queso: 1000 },
-    finished,
     prices,
     guacPrice: 35,
     settings: {
-      // Gramos de carne por pieza (taco o quesadilla), según el promedio real de operación.
-      gramosPorProducto: { bistec: 61, longaniza: 61, arrachera: 41, ribeye: 41 },
-      // El campechano mezcla longaniza y bistec en proporción propia (no 50/50).
-      campechanoLonganiza: 41,
-      campechanoBistec: 31,
+      // Gramos de carne cruda por pieza (taco o quesadilla), verificado contra el Excel de operación:
+      // arrachera/rib eye 40 g (~25 tacos/kg), bistec/longaniza 60 g (~16-17 tacos/kg).
+      gramosPorProducto: { bistec: 60, longaniza: 60, arrachera: 40, ribeye: 40 },
+      // El campechano combina longaniza y bistec en proporción propia (no 50/50): 60 g por pieza en total.
+      campechanoLonganiza: 35,
+      campechanoBistec: 25,
       quesoGramos: 61,
       quesoPrecio: 10,
       gramosPorTortilla: 34,
+      // Tortillas físicas (piezas) usadas por producto: el taco lleva 2, la quesadilla 1.
+      tortillasPorTipo: { ...TORTILLAS_POR_TIPO_DEFAULT },
       alertaStockBajoKg: 1,
       alertaTortillasKg: 2,
     },
@@ -105,9 +106,9 @@ function loadState() {
     // merge shallow to survive future field additions
     const settings = Object.assign(def.settings, parsed.settings);
     settings.gramosPorProducto = Object.assign(def.settings.gramosPorProducto, parsed.settings?.gramosPorProducto);
+    settings.tortillasPorTipo = Object.assign(def.settings.tortillasPorTipo, parsed.settings?.tortillasPorTipo);
     return {
       raw: Object.assign(def.raw, parsed.raw),
-      finished: Object.assign(def.finished, parsed.finished),
       prices: Object.assign(def.prices, parsed.prices),
       guacPrice: parsed.guacPrice ?? def.guacPrice,
       settings,
@@ -177,48 +178,46 @@ function toast(msg) {
 /* ======================================================================
    LÓGICA DE NEGOCIO (mutaciones de estado)
    ====================================================================== */
-function applyPrep(protein, tipoId, piezas, gramos, tortillas) {
-  const p = proteinById(protein);
+// Piezas equivalentes a partir de la materia prima cruda disponible (solo para mostrar
+// disponibilidad estimada en Vender; no bloquea la venta, igual que antes con "Preparar").
+function piezasDisponiblesEstimadas(proteinId) {
+  const p = proteinById(proteinId);
   if (p.combo) {
-    const split = campechanoSplitKg(gramos);
-    STATE.raw.longaniza -= split.longaniza;
-    STATE.raw.bistec -= split.bistec;
-  } else {
-    STATE.raw[protein] -= gramos / 1000;
+    const s = STATE.settings;
+    return Math.floor(Math.min(
+      (STATE.raw.bistec * 1000) / s.campechanoBistec,
+      (STATE.raw.longaniza * 1000) / s.campechanoLonganiza,
+    ));
   }
-  STATE.raw.tortillas -= tortillas * STATE.settings.gramosPorTortilla;
-  const f = STATE.finished[protein][tipoId];
-  f.piezas += piezas;
-  f.gramos += gramos;
-  pushMovement('produccion', { protein, tipo: tipoId, piezas, gramos, tortillas });
+  const gpp = gramosPorPieza(STATE, proteinId);
+  return Math.floor((STATE.raw[proteinId] * 1000) / gpp);
 }
 
 function computeSaleItemImpact(item) {
-  // devuelve { piezas, gramos, quesoGramos } sin mutar el estado (para preview y para aplicar)
+  // devuelve { piezas, gramos, gramosTortilla, quesoGramos } sin mutar el estado
+  // (para preview del ticket y para aplicar/revertir contra materia prima cruda).
   if (item.protein === 'guacamole') {
     return { gramos: item.cantidad * 150 };
   }
-  const f = STATE.finished[item.protein][item.tipo];
+  const gpp = gramosPorPieza(STATE, item.protein);
   let piezas;
-  let gramos;
   if (item.formato === 'pieza') {
     piezas = item.cantidad;
   } else if (item.formato === 'orden5') {
     piezas = item.cantidad * 5;
   } else {
-    const gpp = gramosPorPieza(STATE, item.protein);
     piezas = Math.round((item.cantidad * 1000) / gpp);
   }
-  const avgGramos = f.piezas > 0 ? f.gramos / f.piezas : gramosPorPieza(STATE, item.protein);
-  gramos = item.formato === 'kilo' ? item.cantidad * 1000 : piezas * avgGramos;
+  const gramos = item.formato === 'kilo' ? item.cantidad * 1000 : piezas * gpp;
+  const tortillasPorPieza = STATE.settings.tortillasPorTipo[item.tipo] || 0;
+  const gramosTortilla = piezas * tortillasPorPieza * STATE.settings.gramosPorTortilla;
   const quesoGramos = item.conQueso ? piezas * STATE.settings.quesoGramos : 0;
-  return { piezas, gramos, quesoGramos };
+  return { piezas, gramos, gramosTortilla, quesoGramos };
 }
 
 function applySaleItem(item) {
-  // Aplica el impacto en inventario y lo guarda en el propio item (item.impact),
-  // para poder revertirlo con exactitud si la venta se edita o cancela después,
-  // sin depender de promedios que pueden cambiar con ventas posteriores.
+  // Aplica el impacto en inventario (materia prima cruda) y lo guarda en el propio item
+  // (item.impact), para poder revertirlo con exactitud si la venta se edita o cancela después.
   if (item.protein === 'guacamole') {
     const impact = { gramos: item.cantidad * 150 };
     STATE.raw.guacamole -= impact.gramos;
@@ -226,9 +225,15 @@ function applySaleItem(item) {
     return impact;
   }
   const impact = computeSaleItemImpact(item);
-  const f = STATE.finished[item.protein][item.tipo];
-  f.piezas -= impact.piezas;
-  f.gramos -= impact.gramos;
+  const p = proteinById(item.protein);
+  if (p.combo) {
+    const split = campechanoSplitKg(impact.gramos);
+    STATE.raw.longaniza -= split.longaniza;
+    STATE.raw.bistec -= split.bistec;
+  } else {
+    STATE.raw[item.protein] -= impact.gramos / 1000;
+  }
+  STATE.raw.tortillas -= impact.gramosTortilla;
   if (impact.quesoGramos) STATE.raw.queso -= impact.quesoGramos;
   item.impact = impact;
   return impact;
@@ -236,15 +241,21 @@ function applySaleItem(item) {
 
 function reverseSaleItemImpact(item) {
   // Ventas registradas antes de esta versión no traen "impact" guardado;
-  // en ese caso se recalcula con los promedios actuales como mejor aproximación.
+  // en ese caso se recalcula con los parámetros actuales como mejor aproximación.
   const impact = item.impact || computeSaleItemImpact(item);
   if (item.protein === 'guacamole') {
     STATE.raw.guacamole += impact.gramos;
     return;
   }
-  const f = STATE.finished[item.protein][item.tipo];
-  f.piezas += impact.piezas;
-  f.gramos += impact.gramos;
+  const p = proteinById(item.protein);
+  if (p.combo) {
+    const split = campechanoSplitKg(impact.gramos);
+    STATE.raw.longaniza += split.longaniza;
+    STATE.raw.bistec += split.bistec;
+  } else {
+    STATE.raw[item.protein] += impact.gramos / 1000;
+  }
+  STATE.raw.tortillas += impact.gramosTortilla || 0;
   if (impact.quesoGramos) STATE.raw.queso += impact.quesoGramos;
 }
 
@@ -272,96 +283,14 @@ modalBackdrop.addEventListener('click', e => { if (e.target === modalBackdrop) c
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 
 /* ======================================================================
-   TAB: PREPARAR
-   ====================================================================== */
-function renderPrepGrid() {
-  const grid = document.getElementById('prepGrid');
-  grid.innerHTML = PROTEINS.map(p => TIPOS.map(t => {
-    const f = STATE.finished[p.id][t.id];
-    const low = f.piezas <= 0;
-    return `
-      <button class="product-btn" data-protein="${p.id}" data-action="prep" data-tipo="${t.id}">
-        <div class="p-icon">${t.icon}</div>
-        <div class="p-name">${t.name} de ${p.name}</div>
-        <div class="p-sub">${p.sub || ''}</div>
-        <div class="p-stock ${low ? 'low' : ''}">${num(f.piezas)} piezas listas</div>
-      </button>`;
-  }).join('')).join('');
-}
-
-function openPrepModal(proteinId, tipoId) {
-  const p = proteinById(proteinId), t = tipoById(tipoId);
-  const rawInfo = p.combo
-    ? p.combo.map(id => `${proteinById(id).name}: ${num(STATE.raw[id], 2)} kg`).join(' · ')
-    : `${p.name} crudo: ${num(STATE.raw[proteinId], 2)} kg`;
-  const gpp = gramosPorPieza(STATE, proteinId);
-  const s = STATE.settings;
-  const tortillasPzasAprox = Math.floor(STATE.raw.tortillas / s.gramosPorTortilla);
-  const html = `
-    <h3>Preparar ${t.name} de ${p.name}</h3>
-    <p class="modal-sub">Materia prima disponible — ${rawInfo} · Tortillas: ${num(STATE.raw.tortillas / 1000, 2)} kg (~${num(tortillasPzasAprox)} pzas)</p>
-    ${p.combo ? `<p class="field-hint">El campechano descuenta ${s.campechanoLonganiza} g de longaniza y ${s.campechanoBistec} g de bistec por cada pieza preparada.</p>` : ''}
-    <div class="form-row">
-      <label for="prepPiezas">Cantidad a preparar (piezas)</label>
-      <input type="number" id="prepPiezas" min="0" step="1" value="10">
-    </div>
-    <div class="form-row">
-      <label for="prepGramos">Cantidad de carne a utilizar (gramos)</label>
-      <input type="number" id="prepGramos" min="0" step="10" value="${10 * gpp}">
-      <span class="field-hint">Referencia: ~${gpp} g por pieza</span>
-    </div>
-    <div class="form-row">
-      <label for="prepTortillas">Tortillas a utilizar</label>
-      <input type="number" id="prepTortillas" min="0" step="1" value="10">
-    </div>
-    <div id="prepWarn"></div>
-    <div class="modal-actions">
-      <button class="btn btn-ghost" id="prepCancel">Cancelar</button>
-      <button class="btn btn-primary" id="prepConfirm">Registrar preparación</button>
-    </div>
-  `;
-  openModal(html, root => {
-    const piezasInput = root.querySelector('#prepPiezas');
-    const gramosInput = root.querySelector('#prepGramos');
-    piezasInput.addEventListener('input', () => {
-      gramosInput.value = Math.round((Number(piezasInput.value) || 0) * gpp);
-      root.querySelector('#prepTortillas').value = piezasInput.value;
-    });
-    root.querySelector('#prepCancel').addEventListener('click', closeModal);
-    root.querySelector('#prepConfirm').addEventListener('click', () => {
-      const piezas = Number(piezasInput.value) || 0;
-      const gramos = Number(gramosInput.value) || 0;
-      const tortillas = Number(root.querySelector('#prepTortillas').value) || 0;
-      if (piezas <= 0 || gramos <= 0) { toast('Captura cantidades mayores a cero'); return; }
-      const wouldGoNegative = p.combo
-        ? (() => { const sp = campechanoSplitKg(gramos); return STATE.raw.longaniza - sp.longaniza < 0 || STATE.raw.bistec - sp.bistec < 0; })()
-        : (STATE.raw[proteinId] - gramos / 1000 < 0);
-      const tortillasNegative = STATE.raw.tortillas - tortillas * STATE.settings.gramosPorTortilla < 0;
-      if ((wouldGoNegative || tortillasNegative) && !root.dataset.forced) {
-        root.querySelector('#prepWarn').innerHTML = `<div class="warn-box">⚠️ Esto dejará inventario en negativo (${wouldGoNegative ? 'carne cruda' : ''}${wouldGoNegative && tortillasNegative ? ' y ' : ''}${tortillasNegative ? 'tortillas' : ''}). Presiona de nuevo para confirmar de todas formas.</div>`;
-        root.dataset.forced = '1';
-        return;
-      }
-      applyPrep(proteinId, tipoId, piezas, gramos, tortillas);
-      save();
-      toast(`Preparación registrada: ${piezas} ${t.name.toLowerCase()}s de ${p.name}`);
-      closeModal();
-      renderPrepGrid();
-      renderSellGrid();
-      renderInventory();
-    });
-  });
-}
-
-/* ======================================================================
    TAB: VENDER
    ====================================================================== */
 function renderSellGrid() {
   const grid = document.getElementById('sellGrid');
   const sections = TIPOS.map(t => {
     const cards = PROTEINS.map(p => {
-      const f = STATE.finished[p.id][t.id];
-      const low = f.piezas <= 0;
+      const piezasEstimadas = piezasDisponiblesEstimadas(p.id);
+      const low = piezasEstimadas <= 0;
       const buttons = formatosForTipo(t.id).map(fo => {
         const price = STATE.prices[p.id][t.id][fo.id];
         return `<button class="btn btn-sm" data-action="sell" data-protein="${p.id}" data-tipo="${t.id}" data-formato="${fo.id}">${fo.name}<br><span class="field-hint">${money(price)}</span></button>`;
@@ -370,7 +299,7 @@ function renderSellGrid() {
         <div class="product-btn" data-protein="${p.id}">
           <div class="p-icon">${t.icon}</div>
           <div class="p-name">${p.name}</div>
-          <div class="p-stock ${low ? 'low' : ''}">${num(f.piezas)} piezas listas</div>
+          <div class="p-stock ${low ? 'low' : ''}">~${num(piezasEstimadas)} piezas disponibles (materia prima)</div>
           <div class="format-buttons">${buttons}</div>
         </div>`;
     }).join('');
@@ -397,8 +326,9 @@ function renderSellGrid() {
 function openSellModal(proteinId, tipoId, formatoId) {
   const p = proteinById(proteinId), t = tipoById(tipoId), fo = formatoById(formatoId);
   const price = STATE.prices[proteinId][tipoId][formatoId];
-  const f = STATE.finished[proteinId][tipoId];
+  const piezasEstimadas = piezasDisponiblesEstimadas(proteinId);
   const gpp = gramosPorPieza(STATE, proteinId);
+  const tortillasPorPieza = STATE.settings.tortillasPorTipo[tipoId] || 0;
   const piezasEquiv = cantidad => {
     if (formatoId === 'pieza') return cantidad;
     if (formatoId === 'orden5') return cantidad * 5;
@@ -407,7 +337,8 @@ function openSellModal(proteinId, tipoId, formatoId) {
   const computeSubtotal = (cantidad, conQueso) => price * cantidad + (conQueso ? piezasEquiv(cantidad) * STATE.settings.quesoPrecio : 0);
   const html = `
     <h3>${fo.name} de ${t.name} — ${p.name}</h3>
-    <p class="modal-sub">Disponible: ${num(f.piezas)} piezas · Precio: ${money(price)} / ${fo.unit}</p>
+    <p class="modal-sub">Disponible (aprox.): ${num(piezasEstimadas)} piezas · Precio: ${money(price)} / ${fo.unit}</p>
+    <p class="field-hint">Usa ${gpp} g de carne y ${tortillasPorPieza} tortilla${tortillasPorPieza === 1 ? '' : 's'} por pieza.</p>
     <div class="form-row">
       <label for="sellQty">Cantidad (${fo.unit})</label>
       <input type="number" id="sellQty" min="0" step="${fo.step}" value="${fo.def}">
@@ -441,8 +372,14 @@ function openSellModal(proteinId, tipoId, formatoId) {
       const item = { id: uid(), protein: proteinId, tipo: tipoId, formato: formatoId, cantidad, precioUnit: price, conQueso, subtotal, label: `${fo.name} — ${t.name} ${p.name}${conQueso ? ' (c/queso)' : ''}` };
       const impact = computeSaleItemImpact(item);
       let warn = '';
-      if (impact.piezas > f.piezas) {
-        warn += `<div class="warn-box">⚠️ Solo hay ${num(f.piezas)} piezas preparadas. Se agregará de todas formas.</div>`;
+      const carneInsuficiente = p.combo
+        ? (() => { const sp = campechanoSplitKg(impact.gramos); return sp.longaniza > STATE.raw.longaniza || sp.bistec > STATE.raw.bistec; })()
+        : impact.gramos / 1000 > STATE.raw[proteinId];
+      if (carneInsuficiente) {
+        warn += `<div class="warn-box">⚠️ La carne cruda disponible no alcanza para esta venta. Se agregará de todas formas.</div>`;
+      }
+      if (impact.gramosTortilla > STATE.raw.tortillas) {
+        warn += `<div class="warn-box">⚠️ Solo hay ${num(STATE.raw.tortillas / 1000, 2)} kg de tortillas disponibles. Se agregará de todas formas.</div>`;
       }
       if (conQueso && impact.quesoGramos > STATE.raw.queso) {
         warn += `<div class="warn-box">⚠️ Solo hay ${num(STATE.raw.queso / 1000, 2)} kg de queso disponible. Se agregará de todas formas.</div>`;
@@ -484,6 +421,71 @@ function openGuacSellModal() {
   });
 }
 
+/* ---- Descuento a nivel ticket (requiere nota del motivo) ---- */
+let TICKET_DISCOUNT = null; // { type: 'percent'|'monto', value, nota }
+
+function ticketSubtotal() {
+  return TICKET.reduce((s, it) => s + it.subtotal, 0);
+}
+function ticketDiscountAmount() {
+  if (!TICKET_DISCOUNT) return 0;
+  const subtotal = ticketSubtotal();
+  const amt = TICKET_DISCOUNT.type === 'percent' ? subtotal * (TICKET_DISCOUNT.value / 100) : TICKET_DISCOUNT.value;
+  return Math.min(Math.max(amt, 0), subtotal);
+}
+function ticketTotal() {
+  return ticketSubtotal() - ticketDiscountAmount();
+}
+
+function openDiscountModal() {
+  if (TICKET.length === 0) { toast('Agrega artículos al ticket antes de aplicar un descuento'); return; }
+  const current = TICKET_DISCOUNT;
+  const html = `
+    <h3>Aplicar descuento al ticket</h3>
+    <p class="modal-sub">Subtotal actual: ${money(ticketSubtotal())}</p>
+    <div class="form-row">
+      <label for="discType">Tipo de descuento</label>
+      <select id="discType">
+        <option value="percent" ${current?.type === 'percent' || !current ? 'selected' : ''}>Porcentaje (%)</option>
+        <option value="monto" ${current?.type === 'monto' ? 'selected' : ''}>Monto fijo ($)</option>
+      </select>
+    </div>
+    <div class="form-row">
+      <label for="discValue">Valor</label>
+      <input type="number" id="discValue" min="0" step="0.01" value="${current?.value ?? ''}">
+    </div>
+    <div class="form-row">
+      <label for="discNota">Motivo del descuento (obligatorio)</label>
+      <input type="text" id="discNota" placeholder="Ej. cliente frecuente, promoción, cortesía..." value="${current?.nota ?? ''}">
+    </div>
+    <div id="discWarn"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="discCancel">Cancelar</button>
+      <button class="btn btn-primary" id="discConfirm">Guardar descuento</button>
+    </div>`;
+  openModal(html, root => {
+    root.querySelector('#discCancel').addEventListener('click', closeModal);
+    root.querySelector('#discConfirm').addEventListener('click', () => {
+      const type = root.querySelector('#discType').value;
+      const value = Number(root.querySelector('#discValue').value);
+      const nota = root.querySelector('#discNota').value.trim();
+      if (!value || value <= 0) { toast('Captura un valor de descuento mayor a cero'); return; }
+      if (!nota) {
+        root.querySelector('#discWarn').innerHTML = '<div class="warn-box">⚠️ La nota del motivo es obligatoria para aplicar un descuento.</div>';
+        return;
+      }
+      TICKET_DISCOUNT = { type, value, nota };
+      renderTicket();
+      closeModal();
+    });
+  });
+}
+
+function removeDiscount() {
+  TICKET_DISCOUNT = null;
+  renderTicket();
+}
+
 function renderTicket() {
   const itemsEl = document.getElementById('ticketItems');
   const totalEl = document.getElementById('ticketTotal');
@@ -511,19 +513,45 @@ function renderTicket() {
         </div>
       </div>`).join('');
   }
-  const total = TICKET.reduce((s, it) => s + it.subtotal, 0);
-  totalEl.textContent = money(total);
+
+  const subtotal = ticketSubtotal();
+  const discountAmount = ticketDiscountAmount();
+  const subtotalRow = document.getElementById('ticketSubtotalRow');
+  const discountRow = document.getElementById('ticketDiscountRow');
+  if (TICKET_DISCOUNT) {
+    subtotalRow.style.display = 'flex';
+    document.getElementById('ticketSubtotal').textContent = money(subtotal);
+    discountRow.style.display = 'flex';
+    document.getElementById('ticketDiscountLabel').textContent = TICKET_DISCOUNT.type === 'percent'
+      ? `Descuento (${num(TICKET_DISCOUNT.value, 2)}%)`
+      : 'Descuento';
+    document.getElementById('ticketDiscountNote').textContent = TICKET_DISCOUNT.nota;
+    document.getElementById('ticketDiscountAmount').textContent = `-${money(discountAmount)}`;
+  } else {
+    subtotalRow.style.display = 'none';
+    discountRow.style.display = 'none';
+  }
+
+  totalEl.textContent = money(ticketTotal());
   confirmBtn.disabled = TICKET.length === 0;
+}
+
+function saleItemsSnapshot() {
+  return TICKET.map(({ protein, tipo, formato, cantidad, precioUnit, conQueso, subtotal, label, impact }) => ({ protein, tipo, formato, cantidad, precioUnit, conQueso, subtotal, label, impact }));
 }
 
 function confirmSale() {
   if (TICKET.length === 0) return;
   TICKET.forEach(applySaleItem);
-  const total = TICKET.reduce((s, it) => s + it.subtotal, 0);
-  pushMovement('venta', { items: TICKET.map(({ protein, tipo, formato, cantidad, precioUnit, conQueso, subtotal, label, impact }) => ({ protein, tipo, formato, cantidad, precioUnit, conQueso, subtotal, label, impact })), total });
+  const subtotal = ticketSubtotal();
+  const discountAmount = ticketDiscountAmount();
+  const total = subtotal - discountAmount;
+  const discount = TICKET_DISCOUNT ? { type: TICKET_DISCOUNT.type, value: TICKET_DISCOUNT.value, amount: discountAmount, nota: TICKET_DISCOUNT.nota } : null;
+  pushMovement('venta', { items: saleItemsSnapshot(), subtotal, discount, total });
   save();
   toast(`Venta registrada por ${money(total)}`);
   TICKET = [];
+  TICKET_DISCOUNT = null;
   renderTicket();
   renderSellGrid();
   renderInventory();
@@ -542,6 +570,7 @@ function startEditSale(id) {
   if (sale.cancelled) { toast('Esta venta está cancelada y no se puede editar'); return; }
   EDITING_SALE_ID = id;
   TICKET = sale.items.map(it => ({ ...it, id: uid() }));
+  TICKET_DISCOUNT = sale.discount ? { type: sale.discount.type, value: sale.discount.value, nota: sale.discount.nota } : null;
   document.querySelector('.tab-btn[data-tab="vender"]').click();
   renderTicket();
   toast('Editando venta: modifica los artículos y presiona "Guardar cambios"');
@@ -550,6 +579,7 @@ function startEditSale(id) {
 function cancelEditSale() {
   EDITING_SALE_ID = null;
   TICKET = [];
+  TICKET_DISCOUNT = null;
   renderTicket();
 }
 
@@ -563,8 +593,12 @@ function saveEditedSale() {
   // Revierte el impacto original y aplica el de los artículos editados.
   sale.items.forEach(reverseSaleItemImpact);
   TICKET.forEach(applySaleItem);
-  const total = TICKET.reduce((s, it) => s + it.subtotal, 0);
-  sale.items = TICKET.map(({ protein, tipo, formato, cantidad, precioUnit, conQueso, subtotal, label, impact }) => ({ protein, tipo, formato, cantidad, precioUnit, conQueso, subtotal, label, impact }));
+  const subtotal = ticketSubtotal();
+  const discountAmount = ticketDiscountAmount();
+  const total = subtotal - discountAmount;
+  sale.items = saleItemsSnapshot();
+  sale.subtotal = subtotal;
+  sale.discount = TICKET_DISCOUNT ? { type: TICKET_DISCOUNT.type, value: TICKET_DISCOUNT.value, amount: discountAmount, nota: TICKET_DISCOUNT.nota } : null;
   sale.total = total;
   sale.editedAt = Date.now();
   pushMovement('edicion_venta', { saleId: sale.id, total });
@@ -572,6 +606,7 @@ function saveEditedSale() {
   toast('Venta actualizada e inventario ajustado');
   EDITING_SALE_ID = null;
   TICKET = [];
+  TICKET_DISCOUNT = null;
   renderTicket();
   renderSellGrid();
   renderInventory();
@@ -683,22 +718,6 @@ function renderInventory() {
       <td>${stockTag(r.value, r.threshold)}</td>
       <td><button class="btn btn-ghost" data-adjust-raw="${r.id}">Ajustar</button></td>
     </tr>`).join('');
-
-  const finTbody = document.querySelector('#finishedInventoryTable tbody');
-  const rows = [];
-  PROTEINS.forEach(p => TIPOS.forEach(t => {
-    const f = STATE.finished[p.id][t.id];
-    const avg = f.piezas > 0 ? f.gramos / f.piezas : 0;
-    rows.push(`
-      <tr>
-        <td>${t.icon} ${t.name} — ${p.name}</td>
-        <td class="${f.piezas < 0 ? 'field-hint' : ''}" style="${f.piezas < 0 ? 'color:var(--status-critical);font-weight:700;' : ''}">${num(f.piezas)}</td>
-        <td>${num(f.gramos, 0)} g (${num(f.gramos / 1000, 2)} kg)</td>
-        <td>${avg ? num(avg, 1) : '—'}</td>
-        <td><button class="btn btn-ghost" data-adjust-finished="${p.id}|${t.id}">Ajustar</button></td>
-      </tr>`);
-  }));
-  finTbody.innerHTML = rows.join('');
 }
 
 function openAdjustRawModal(insumoId) {
@@ -737,47 +756,6 @@ function openAdjustRawModal(insumoId) {
   });
 }
 
-function openAdjustFinishedModal(proteinId, tipoId) {
-  const p = proteinById(proteinId), t = tipoById(tipoId);
-  const f = STATE.finished[proteinId][tipoId];
-  const html = `
-    <h3>Ajustar: ${t.name} — ${p.name}</h3>
-    <p class="modal-sub">Piezas actuales: ${num(f.piezas)} · Carne actual: ${num(f.gramos)} g</p>
-    <div class="form-row">
-      <label for="adjPiezas">Nuevas piezas</label>
-      <input type="number" id="adjPiezas" step="1" value="${f.piezas}">
-    </div>
-    <div class="form-row">
-      <label for="adjGramos">Nuevos gramos de carne</label>
-      <input type="number" id="adjGramos" step="1" value="${f.gramos}">
-    </div>
-    <div class="form-row">
-      <label for="adjFNote">Motivo (opcional)</label>
-      <input type="text" id="adjFNote" placeholder="Ej. conteo físico, merma...">
-    </div>
-    <div class="modal-actions">
-      <button class="btn btn-ghost" id="adjFCancel">Cancelar</button>
-      <button class="btn btn-primary" id="adjFConfirm">Guardar ajuste</button>
-    </div>`;
-  openModal(html, root => {
-    root.querySelector('#adjFCancel').addEventListener('click', closeModal);
-    root.querySelector('#adjFConfirm').addEventListener('click', () => {
-      const piezas = Number(root.querySelector('#adjPiezas').value);
-      const gramos = Number(root.querySelector('#adjGramos').value);
-      const nota = root.querySelector('#adjFNote').value.trim();
-      pushMovement('ajuste', { target: 'finished', key: `${proteinId}|${tipoId}`, deltaPiezas: piezas - f.piezas, deltaGramos: gramos - f.gramos, nota });
-      f.piezas = piezas;
-      f.gramos = gramos;
-      save();
-      toast('Ajuste guardado');
-      closeModal();
-      renderInventory();
-      renderPrepGrid();
-      renderSellGrid();
-    });
-  });
-}
-
 /* ======================================================================
    TAB: REPORTES
    ====================================================================== */
@@ -792,8 +770,9 @@ function movementDetailText(m) {
   }
   if (m.type === 'venta') {
     const detail = m.items.map(it => `${it.cantidad}× ${it.label}`).join(', ');
+    const descuento = m.discount ? ` · desc. ${money(m.discount.amount)} (${m.discount.nota})` : '';
     const tags = [m.cancelled ? 'CANCELADA' : null, m.editedAt ? 'editada' : null].filter(Boolean).join(', ');
-    return tags ? `${detail} (${tags})` : detail;
+    return `${detail}${descuento}${tags ? ` (${tags})` : ''}`;
   }
   if (m.type === 'ajuste') {
     return m.target === 'raw'
@@ -811,12 +790,15 @@ function movementDetailText(m) {
 
 function getDailyReportData(date) {
   const ventasDelDia = STATE.movements.filter(m => m.type === 'venta' && !m.cancelled && todayStr(new Date(m.ts)) === date);
-  const produccionDelDia = STATE.movements.filter(m => m.type === 'produccion' && todayStr(new Date(m.ts)) === date);
+  const canceladasDelDia = STATE.movements.filter(m => m.type === 'venta' && m.cancelled && todayStr(new Date(m.ts)) === date);
 
   const totalVendido = ventasDelDia.reduce((s, m) => s + m.total, 0);
   const totalPiezasVendidas = ventasDelDia.reduce((s, m) => s + m.items.reduce((s2, it) => s2 + (it.protein === 'guacamole' ? 0 : it.cantidad), 0), 0);
-  const totalCarnePreparada = produccionDelDia.reduce((s, m) => s + m.gramos, 0);
+  const totalCarneVendida = ventasDelDia.reduce((s, m) => s + m.items.reduce((s2, it) => s2 + (it.protein === 'guacamole' ? 0 : (it.impact?.gramos || 0)), 0), 0);
+  const totalDescuentos = ventasDelDia.reduce((s, m) => s + (m.discount?.amount || 0), 0);
   const totalTicketsCount = ventasDelDia.length;
+  const totalCanceladas = canceladasDelDia.length;
+  const totalCanceladasMonto = canceladasDelDia.reduce((s, m) => s + m.total, 0);
 
   const agg = {};
   ventasDelDia.forEach(m => m.items.forEach(it => {
@@ -827,7 +809,7 @@ function getDailyReportData(date) {
   }));
   const rows = Object.values(agg).sort((a, b) => b.importe - a.importe);
 
-  return { date, totalVendido, totalPiezasVendidas, totalCarnePreparada, totalTicketsCount, rows };
+  return { date, totalVendido, totalPiezasVendidas, totalCarneVendida, totalDescuentos, totalTicketsCount, totalCanceladas, totalCanceladasMonto, canceladasDelDia, rows };
 }
 
 function renderDailyReport() {
@@ -840,17 +822,30 @@ function renderDailyReport() {
     <div class="stat-tile"><div class="st-label">Ventas totales</div><div class="st-value">${money(data.totalVendido)}</div></div>
     <div class="stat-tile"><div class="st-label">Tickets cobrados</div><div class="st-value">${num(data.totalTicketsCount)}</div></div>
     <div class="stat-tile"><div class="st-label">Piezas / porciones vendidas</div><div class="st-value">${num(data.totalPiezasVendidas)}</div></div>
-    <div class="stat-tile"><div class="st-label">Carne preparada</div><div class="st-value">${num(data.totalCarnePreparada / 1000, 2)} kg</div></div>
+    <div class="stat-tile"><div class="st-label">Carne vendida</div><div class="st-value">${num(data.totalCarneVendida / 1000, 2)} kg</div></div>
+    <div class="stat-tile"><div class="st-label">Descuentos otorgados</div><div class="st-value">${money(data.totalDescuentos)}</div></div>
+    <div class="stat-tile"><div class="st-label">Ventas canceladas</div><div class="st-value">${num(data.totalCanceladas)} (${money(data.totalCanceladasMonto)})</div></div>
   `;
 
   const tbody = document.querySelector('#dailySalesTable tbody');
   tbody.innerHTML = data.rows.length ? data.rows.map(r => `
     <tr><td>${r.label}</td><td>${formatoById(r.formato)?.name || (r.formato === 'orden' ? 'Orden 150g' : r.formato)}</td><td>${num(r.cantidad, 2)}</td><td>${money(r.importe)}</td></tr>
   `).join('') : '<tr><td colspan="4" class="field-hint">Sin ventas en esta fecha.</td></tr>';
+
+  const cancelTbody = document.querySelector('#dailyCancelTable tbody');
+  cancelTbody.innerHTML = data.canceladasDelDia.length ? data.canceladasDelDia.map(m => `
+    <tr><td>${fmtDateTime(m.ts)}</td><td>${m.items.map(it => `${it.cantidad}× ${it.label}`).join(', ')}</td><td>${money(m.total)}</td><td>${cancelNotaFor(m.id) || '—'}</td></tr>
+  `).join('') : '<tr><td colspan="4" class="field-hint">Sin cancelaciones en esta fecha.</td></tr>';
+}
+
+function cancelNotaFor(saleId) {
+  const mov = STATE.movements.find(m => m.type === 'cancelacion_venta' && m.saleId === saleId);
+  return mov?.nota;
 }
 
 function getMonthlyReportData(month) {
   const ventasDelMes = STATE.movements.filter(m => m.type === 'venta' && !m.cancelled && monthStr(new Date(m.ts)) === month);
+  const canceladasDelMes = STATE.movements.filter(m => m.type === 'venta' && m.cancelled && monthStr(new Date(m.ts)) === month);
 
   const totalMes = ventasDelMes.reduce((s, m) => s + m.total, 0);
   const [y, mo] = month.split('-').map(Number);
@@ -864,6 +859,9 @@ function getMonthlyReportData(month) {
   const promedioDiario = diasConVenta ? totalMes / diasConVenta : 0;
   const maxDia = porDia.reduce((best, v, i) => v > best.v ? { v, i } : best, { v: 0, i: -1 });
   const totalPiezas = ventasDelMes.reduce((s, m) => s + m.items.reduce((s2, it) => s2 + (it.protein === 'guacamole' ? 0 : it.cantidad), 0), 0);
+  const totalDescuentos = ventasDelMes.reduce((s, m) => s + (m.discount?.amount || 0), 0);
+  const totalCanceladas = canceladasDelMes.length;
+  const totalCanceladasMonto = canceladasDelMes.reduce((s, m) => s + m.total, 0);
 
   const agg = {};
   ventasDelMes.forEach(m => m.items.forEach(it => {
@@ -873,7 +871,7 @@ function getMonthlyReportData(month) {
   }));
   const rows = Object.values(agg).sort((a, b) => b.importe - a.importe);
 
-  return { month, totalMes, porDia, diasConVenta, promedioDiario, maxDia, totalPiezas, rows };
+  return { month, totalMes, porDia, diasConVenta, promedioDiario, maxDia, totalPiezas, totalDescuentos, totalCanceladas, totalCanceladasMonto, rows };
 }
 
 function renderMonthlyReport() {
@@ -887,6 +885,8 @@ function renderMonthlyReport() {
     <div class="stat-tile"><div class="st-label">Promedio diario (días con venta)</div><div class="st-value">${money(data.promedioDiario)}</div></div>
     <div class="stat-tile"><div class="st-label">Mejor día</div><div class="st-value">${data.maxDia.i >= 0 ? `Día ${data.maxDia.i + 1} — ${money(data.maxDia.v)}` : '—'}</div></div>
     <div class="stat-tile"><div class="st-label">Piezas / porciones vendidas</div><div class="st-value">${num(data.totalPiezas)}</div></div>
+    <div class="stat-tile"><div class="st-label">Descuentos otorgados</div><div class="st-value">${money(data.totalDescuentos)}</div></div>
+    <div class="stat-tile"><div class="st-label">Ventas canceladas</div><div class="st-value">${num(data.totalCanceladas)} (${money(data.totalCanceladasMonto)})</div></div>
   `;
 
   const maxVal = Math.max(...data.porDia, 1);
@@ -973,29 +973,13 @@ function printDailyReport() {
       <div class="print-stat"><strong>${money(data.totalVendido)}</strong><span>Ventas totales</span></div>
       <div class="print-stat"><strong>${num(data.totalTicketsCount)}</strong><span>Tickets cobrados</span></div>
       <div class="print-stat"><strong>${num(data.totalPiezasVendidas)}</strong><span>Piezas vendidas</span></div>
-      <div class="print-stat"><strong>${num(data.totalCarnePreparada / 1000, 2)} kg</strong><span>Carne preparada</span></div>
+      <div class="print-stat"><strong>${num(data.totalCarneVendida / 1000, 2)} kg</strong><span>Carne vendida</span></div>
+      <div class="print-stat"><strong>${money(data.totalDescuentos)}</strong><span>Descuentos otorgados</span></div>
+      <div class="print-stat"><strong>${num(data.totalCanceladas)} (${money(data.totalCanceladasMonto)})</strong><span>Ventas canceladas</span></div>
     </div>
     <table class="print-table"><thead><tr><th>Producto</th><th>Formato</th><th>Cantidad</th><th>Importe</th></tr></thead><tbody>${rowsHtml}</tbody></table>
   `);
   printReport(html);
-}
-
-function shareDailyReportWhatsApp() {
-  const date = document.getElementById('dailyDate').value || todayStr();
-  const data = getDailyReportData(date);
-  const lines = [
-    `📋 *Reporte diario — ${data.date}*`,
-    `💰 Ventas totales: ${money(data.totalVendido)}`,
-    `🧾 Tickets cobrados: ${num(data.totalTicketsCount)}`,
-    `🌮 Piezas/porciones vendidas: ${num(data.totalPiezasVendidas)}`,
-    `🥩 Carne preparada: ${num(data.totalCarnePreparada / 1000, 2)} kg`,
-    '',
-    '*Ventas por producto:*',
-    ...(data.rows.length
-      ? data.rows.map(r => `• ${r.label} x${num(r.cantidad, 2)} — ${money(r.importe)}`)
-      : ['Sin ventas en esta fecha.']),
-  ];
-  openWhatsApp(lines.join('\n'));
 }
 
 function printMonthlyReport() {
@@ -1010,28 +994,12 @@ function printMonthlyReport() {
       <div class="print-stat"><strong>${money(data.promedioDiario)}</strong><span>Promedio diario</span></div>
       <div class="print-stat"><strong>${data.maxDia.i >= 0 ? `Día ${data.maxDia.i + 1} — ${money(data.maxDia.v)}` : '—'}</strong><span>Mejor día</span></div>
       <div class="print-stat"><strong>${num(data.totalPiezas)}</strong><span>Piezas vendidas</span></div>
+      <div class="print-stat"><strong>${money(data.totalDescuentos)}</strong><span>Descuentos otorgados</span></div>
+      <div class="print-stat"><strong>${num(data.totalCanceladas)} (${money(data.totalCanceladasMonto)})</strong><span>Ventas canceladas</span></div>
     </div>
     <table class="print-table"><thead><tr><th>Producto</th><th>Cantidad</th><th>Importe</th></tr></thead><tbody>${rowsHtml}</tbody></table>
   `);
   printReport(html);
-}
-
-function shareMonthlyReportWhatsApp() {
-  const month = document.getElementById('monthlyMonth').value || monthStr();
-  const data = getMonthlyReportData(month);
-  const lines = [
-    `📈 *Reporte mensual — ${data.month}*`,
-    `💰 Ventas del mes: ${money(data.totalMes)}`,
-    `📊 Promedio diario: ${money(data.promedioDiario)}`,
-    `🏆 Mejor día: ${data.maxDia.i >= 0 ? `Día ${data.maxDia.i + 1} — ${money(data.maxDia.v)}` : '—'}`,
-    `🌮 Piezas/porciones vendidas: ${num(data.totalPiezas)}`,
-    '',
-    '*Totales por producto:*',
-    ...(data.rows.length
-      ? data.rows.map(r => `• ${r.label} x${num(r.cantidad, 2)} — ${money(r.importe)}`)
-      : ['Sin ventas en este mes.']),
-  ];
-  openWhatsApp(lines.join('\n'));
 }
 
 function printHistoryReport() {
@@ -1044,14 +1012,200 @@ function printHistoryReport() {
   printReport(html);
 }
 
+/* ---- Generación de imagen (JPG/PNG) de reportes para enviar por WhatsApp ----
+   Se dibuja el reporte en un <canvas> (sin dependencias externas, funciona sin internet)
+   y se comparte como archivo de imagen; si el navegador no soporta compartir archivos,
+   se descarga la imagen y se abre WhatsApp con un texto resumen para adjuntarla a mano. */
+const REPORT_IMAGE_COLORS = {
+  bg: '#ffffff', brand: '#2a78d6', brandInk: '#ffffff',
+  text: '#0b0b0b', textMuted: '#52514e', textFaint: '#898781',
+  tileBg: '#f2f1ed', headBg: '#eef2f7', border: '#e1e0d9', stripe: '#f9f9f7',
+};
+
+function truncateText(ctx, text, maxWidth) {
+  let t = String(text ?? '');
+  if (ctx.measureText(t).width <= maxWidth) return t;
+  while (t.length > 1 && ctx.measureText(t + '…').width > maxWidth) t = t.slice(0, -1);
+  return t + '…';
+}
+
+function buildReportCanvas({ title, subtitle, stats = [], columns, rows, footerLines = [] }) {
+  const C = REPORT_IMAGE_COLORS;
+  const width = 960;
+  const padding = 28;
+  const brandH = 64;
+  const titleH = 34 + (subtitle ? 22 : 0);
+  const statTileH = 58;
+  const statsH = stats.length ? statTileH + 20 : 0;
+  const rowH = 28;
+  const tableHeadH = 32;
+  const tableH = tableHeadH + Math.max(rows.length, 1) * rowH;
+  const footerH = 30 + footerLines.length * 16;
+  const height = brandH + titleH + statsH + tableH + footerH + padding;
+
+  const scale = 2;
+  const canvas = document.createElement('canvas');
+  canvas.width = width * scale;
+  canvas.height = height * scale;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(scale, scale);
+  ctx.textBaseline = 'alphabetic';
+
+  ctx.fillStyle = C.bg;
+  ctx.fillRect(0, 0, width, height);
+
+  // Barra de marca
+  ctx.fillStyle = C.brand;
+  ctx.fillRect(0, 0, width, brandH);
+  ctx.fillStyle = C.brandInk;
+  ctx.font = '700 22px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+  ctx.fillText('🌮 Taquería POS', padding, brandH / 2 + 8);
+
+  let y = brandH + 34;
+  ctx.fillStyle = C.text;
+  ctx.font = '700 20px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+  ctx.fillText(title, padding, y);
+  if (subtitle) {
+    y += 22;
+    ctx.fillStyle = C.textMuted;
+    ctx.font = '400 14px system-ui, -apple-system, Segoe UI, Roboto, sans-serif';
+    ctx.fillText(subtitle, padding, y);
+  }
+  y += 26;
+
+  // Tarjetas de estadísticas
+  if (stats.length) {
+    const gap = 12;
+    const tileW = (width - padding * 2 - gap * (stats.length - 1)) / stats.length;
+    stats.forEach((s, i) => {
+      const x = padding + i * (tileW + gap);
+      ctx.fillStyle = C.tileBg;
+      ctx.fillRect(x, y, tileW, statTileH);
+      ctx.fillStyle = C.textFaint;
+      ctx.font = '400 11px system-ui, sans-serif';
+      ctx.fillText(truncateText(ctx, s.label, tileW - 16), x + 10, y + 20);
+      ctx.fillStyle = C.text;
+      ctx.font = '700 16px system-ui, sans-serif';
+      ctx.fillText(truncateText(ctx, s.value, tileW - 16), x + 10, y + 42);
+    });
+    y += statTileH + 20;
+  }
+
+  // Tabla
+  const totalColW = width - padding * 2;
+  const colX = [];
+  let acc = padding;
+  columns.forEach(c => { colX.push(acc); acc += totalColW * c.width; });
+
+  ctx.fillStyle = C.headBg;
+  ctx.fillRect(padding, y, totalColW, tableHeadH);
+  ctx.fillStyle = C.text;
+  ctx.font = '700 13px system-ui, sans-serif';
+  columns.forEach((c, i) => ctx.fillText(truncateText(ctx, c.label, totalColW * c.width - 12), colX[i] + 8, y + tableHeadH / 2 + 4));
+  y += tableHeadH;
+
+  ctx.font = '400 13px system-ui, sans-serif';
+  const dataRows = rows.length ? rows : [columns.map(() => '—')];
+  dataRows.forEach((row, ri) => {
+    if (rows.length && ri % 2 === 1) {
+      ctx.fillStyle = C.stripe;
+      ctx.fillRect(padding, y, totalColW, rowH);
+    }
+    ctx.fillStyle = C.text;
+    row.forEach((cell, ci) => ctx.fillText(truncateText(ctx, cell, totalColW * columns[ci].width - 12), colX[ci] + 8, y + rowH / 2 + 4));
+    y += rowH;
+  });
+
+  y += 14;
+  ctx.fillStyle = C.textFaint;
+  ctx.font = '400 12px system-ui, sans-serif';
+  footerLines.forEach(line => { ctx.fillText(line, padding, y); y += 16; });
+
+  return canvas;
+}
+
+function shareCanvasReport(canvas, filename, whatsappText) {
+  canvas.toBlob(async blob => {
+    if (!blob) { toast('No se pudo generar la imagen del reporte'); return; }
+    let shared = false;
+    if (navigator.canShare && navigator.share) {
+      try {
+        const file = new File([blob], filename, { type: 'image/png' });
+        if (navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file], title: 'Reporte Taquería POS', text: whatsappText });
+          shared = true;
+        }
+      } catch (err) {
+        // el usuario canceló el share o el navegador lo rechazó; se usa el respaldo de descarga
+      }
+    }
+    if (!shared) {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast('Imagen del reporte descargada. Ábrela en WhatsApp para adjuntarla.');
+      openWhatsApp(whatsappText);
+    }
+  }, 'image/png');
+}
+
+function shareDailyReportWhatsApp() {
+  const date = document.getElementById('dailyDate').value || todayStr();
+  const data = getDailyReportData(date);
+  const canvas = buildReportCanvas({
+    title: `Reporte diario — ${data.date}`,
+    stats: [
+      { label: 'Ventas totales', value: money(data.totalVendido) },
+      { label: 'Tickets cobrados', value: num(data.totalTicketsCount) },
+      { label: 'Piezas vendidas', value: num(data.totalPiezasVendidas) },
+      { label: 'Carne vendida', value: `${num(data.totalCarneVendida / 1000, 2)} kg` },
+      { label: 'Descuentos', value: money(data.totalDescuentos) },
+      { label: 'Canceladas', value: `${num(data.totalCanceladas)} (${money(data.totalCanceladasMonto)})` },
+    ],
+    columns: [{ label: 'Producto', width: 0.4 }, { label: 'Formato', width: 0.22 }, { label: 'Cant.', width: 0.16 }, { label: 'Importe', width: 0.22 }],
+    rows: data.rows.map(r => [r.label, formatoById(r.formato)?.name || (r.formato === 'orden' ? 'Orden 150g' : r.formato), num(r.cantidad, 2), money(r.importe)]),
+    footerLines: [`Generado el ${fmtDateTime(Date.now())}`],
+  });
+  const text = `📋 *Reporte diario — ${data.date}*\n💰 Ventas: ${money(data.totalVendido)} · 🧾 Tickets: ${num(data.totalTicketsCount)}\nImagen del reporte adjunta.`;
+  shareCanvasReport(canvas, `reporte-diario-${data.date}.png`, text);
+}
+
+function shareMonthlyReportWhatsApp() {
+  const month = document.getElementById('monthlyMonth').value || monthStr();
+  const data = getMonthlyReportData(month);
+  const canvas = buildReportCanvas({
+    title: `Reporte mensual — ${data.month}`,
+    stats: [
+      { label: 'Ventas del mes', value: money(data.totalMes) },
+      { label: 'Promedio diario', value: money(data.promedioDiario) },
+      { label: 'Mejor día', value: data.maxDia.i >= 0 ? `Día ${data.maxDia.i + 1} — ${money(data.maxDia.v)}` : '—' },
+      { label: 'Piezas vendidas', value: num(data.totalPiezas) },
+      { label: 'Descuentos', value: money(data.totalDescuentos) },
+      { label: 'Canceladas', value: `${num(data.totalCanceladas)} (${money(data.totalCanceladasMonto)})` },
+    ],
+    columns: [{ label: 'Producto', width: 0.5 }, { label: 'Cantidad', width: 0.25 }, { label: 'Importe', width: 0.25 }],
+    rows: data.rows.map(r => [r.label, num(r.cantidad, 2), money(r.importe)]),
+    footerLines: [`Generado el ${fmtDateTime(Date.now())}`],
+  });
+  const text = `📈 *Reporte mensual — ${data.month}*\n💰 Ventas del mes: ${money(data.totalMes)}\nImagen del reporte adjunta.`;
+  shareCanvasReport(canvas, `reporte-mensual-${data.month}.png`, text);
+}
+
 function shareHistoryReportWhatsApp() {
   const filter = document.getElementById('historyFilter').value;
   const rows = STATE.movements.filter(m => filter === 'todos' || m.type === filter).slice().reverse().slice(0, 30);
-  const lines = [
-    '📋 *Historial de movimientos (últimos 30)*',
-    ...(rows.length ? rows.map(m => `• ${fmtDateTime(m.ts)} — ${MOVEMENT_LABELS[m.type]}: ${movementDetailText(m)}`) : ['Sin movimientos.']),
-  ];
-  openWhatsApp(lines.join('\n'));
+  const canvas = buildReportCanvas({
+    title: 'Historial de movimientos',
+    subtitle: `Filtro: ${filter === 'todos' ? 'Todos' : MOVEMENT_LABELS[filter]} · últimos ${rows.length}`,
+    columns: [{ label: 'Fecha', width: 0.2 }, { label: 'Tipo', width: 0.18 }, { label: 'Detalle', width: 0.44 }, { label: 'Importe', width: 0.18 }],
+    rows: rows.map(m => [fmtDateTime(m.ts), MOVEMENT_LABELS[m.type], movementDetailText(m), m.type === 'venta' ? money(m.total) : '']),
+    footerLines: [`Generado el ${fmtDateTime(Date.now())}`],
+  });
+  const text = '📋 *Historial de movimientos* — imagen adjunta.';
+  shareCanvasReport(canvas, `historial-movimientos-${todayStr()}.png`, text);
 }
 
 /* ======================================================================
@@ -1107,6 +1261,8 @@ function renderConfigMisc() {
   document.getElementById('campechanoLonganiza').value = STATE.settings.campechanoLonganiza;
   document.getElementById('campechanoBistec').value = STATE.settings.campechanoBistec;
   document.getElementById('gramosPorTortilla').value = STATE.settings.gramosPorTortilla;
+  document.getElementById('tortillasPorTaco').value = STATE.settings.tortillasPorTipo.taco;
+  document.getElementById('tortillasPorQuesadilla').value = STATE.settings.tortillasPorTipo.quesadilla;
   document.getElementById('alertaStockBajo').value = STATE.settings.alertaStockBajoKg;
   document.getElementById('alertaTortillasKg').value = STATE.settings.alertaTortillasKg;
 }
@@ -1118,6 +1274,8 @@ function bindConfigInputs() {
   document.getElementById('campechanoLonganiza').addEventListener('change', e => { STATE.settings.campechanoLonganiza = Number(e.target.value) || 1; save(); });
   document.getElementById('campechanoBistec').addEventListener('change', e => { STATE.settings.campechanoBistec = Number(e.target.value) || 1; save(); });
   document.getElementById('gramosPorTortilla').addEventListener('change', e => { STATE.settings.gramosPorTortilla = Number(e.target.value) || 1; save(); });
+  document.getElementById('tortillasPorTaco').addEventListener('change', e => { STATE.settings.tortillasPorTipo.taco = Number(e.target.value) || 0; save(); });
+  document.getElementById('tortillasPorQuesadilla').addEventListener('change', e => { STATE.settings.tortillasPorTipo.quesadilla = Number(e.target.value) || 0; save(); });
   document.getElementById('alertaStockBajo').addEventListener('change', e => { STATE.settings.alertaStockBajoKg = Number(e.target.value) || 0; save(); renderInventory(); });
   document.getElementById('alertaTortillasKg').addEventListener('change', e => { STATE.settings.alertaTortillasKg = Number(e.target.value) || 0; save(); renderInventory(); });
 
@@ -1202,11 +1360,6 @@ function initTabs() {
    EVENTOS GLOBALES (delegación)
    ====================================================================== */
 function initEvents() {
-  document.getElementById('prepGrid').addEventListener('click', e => {
-    const btn = e.target.closest('[data-action="prep"]');
-    if (btn) openPrepModal(btn.dataset.protein, btn.dataset.tipo);
-  });
-
   document.getElementById('sellGrid').addEventListener('click', e => {
     const sellBtn = e.target.closest('[data-action="sell"]');
     if (sellBtn) { openSellModal(sellBtn.dataset.protein, sellBtn.dataset.tipo, sellBtn.dataset.formato); return; }
@@ -1218,7 +1371,9 @@ function initEvents() {
     const rm = e.target.closest('[data-remove]');
     if (rm) { TICKET = TICKET.filter(it => it.id !== rm.dataset.remove); renderTicket(); }
   });
-  document.getElementById('clearTicketBtn').addEventListener('click', () => { TICKET = []; renderTicket(); });
+  document.getElementById('clearTicketBtn').addEventListener('click', () => { TICKET = []; TICKET_DISCOUNT = null; renderTicket(); });
+  document.getElementById('addDiscountBtn').addEventListener('click', openDiscountModal);
+  document.getElementById('removeDiscountBtn').addEventListener('click', removeDiscount);
   document.getElementById('confirmSaleBtn').addEventListener('click', () => {
     if (EDITING_SALE_ID) saveEditedSale();
     else confirmSale();
@@ -1237,10 +1392,6 @@ function initEvents() {
   document.getElementById('rawInventoryTable').addEventListener('click', e => {
     const btn = e.target.closest('[data-adjust-raw]');
     if (btn) openAdjustRawModal(btn.dataset.adjustRaw);
-  });
-  document.getElementById('finishedInventoryTable').addEventListener('click', e => {
-    const btn = e.target.closest('[data-adjust-finished]');
-    if (btn) { const [pid, tid] = btn.dataset.adjustFinished.split('|'); openAdjustFinishedModal(pid, tid); }
   });
 
   document.getElementById('dailyDate').addEventListener('change', renderDailyReport);
@@ -1288,7 +1439,6 @@ function initClock() {
    INIT
    ====================================================================== */
 function renderAll() {
-  renderPrepGrid();
   renderSellGrid();
   renderTicket();
   renderPurchaseForm();

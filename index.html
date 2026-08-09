@@ -25,8 +25,7 @@
 </header>
 
 <nav class="tabs" id="tabs">
-  <button class="tab-btn active" data-tab="preparar">🔥 Preparar</button>
-  <button class="tab-btn" data-tab="vender">🧾 Vender</button>
+  <button class="tab-btn active" data-tab="vender">🧾 Vender</button>
   <button class="tab-btn" data-tab="compras">📦 Compras</button>
   <button class="tab-btn" data-tab="inventario">📊 Inventario</button>
   <button class="tab-btn" data-tab="reportes">📈 Reportes</button>
@@ -35,20 +34,11 @@
 
 <main id="app">
 
-  <!-- ================= PREPARAR ================= -->
-  <section class="tab-panel active" id="panel-preparar">
-    <div class="panel-head">
-      <h2>Preparar producto</h2>
-      <p class="hint">Elige un producto para registrar cuántas piezas preparaste y cuánta carne utilizaste. Esto resta materia prima (carne cruda y tortillas) y suma al inventario de producto listo para vender.</p>
-    </div>
-    <div class="grid-buttons" id="prepGrid"></div>
-  </section>
-
   <!-- ================= VENDER ================= -->
-  <section class="tab-panel" id="panel-vender">
+  <section class="tab-panel active" id="panel-vender">
     <div class="panel-head">
       <h2>Registrar venta</h2>
-      <p class="hint">Elige el producto y formato vendido. Se descuenta del inventario preparado y se suma a las ventas del día.</p>
+      <p class="hint">Elige el producto y formato vendido. Se descuenta directo de la materia prima (carne, tortillas, queso) y se suma a las ventas del día.</p>
     </div>
     <div id="sellGrid"></div>
     <div class="ticket-box" id="ticketBox">
@@ -61,6 +51,21 @@
         <button class="btn btn-ghost btn-sm" id="cancelEditBtn">Cancelar edición</button>
       </div>
       <div id="ticketItems" class="ticket-items"><p class="empty">Sin artículos todavía.</p></div>
+      <div class="ticket-subtotal" id="ticketSubtotalRow" style="display:none">
+        <span>Subtotal</span>
+        <span id="ticketSubtotal">$0.00</span>
+      </div>
+      <div class="ticket-discount-row" id="ticketDiscountRow" style="display:none">
+        <div>
+          <span id="ticketDiscountLabel"></span>
+          <div class="field-hint" id="ticketDiscountNote"></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span id="ticketDiscountAmount"></span>
+          <button class="tl-remove" id="removeDiscountBtn" title="Quitar descuento">✕</button>
+        </div>
+      </div>
+      <button class="btn btn-ghost btn-sm btn-block" id="addDiscountBtn">🏷️ Aplicar descuento</button>
       <div class="ticket-total">
         <span>Total</span>
         <strong id="ticketTotal">$0.00</strong>
@@ -103,21 +108,13 @@
   <section class="tab-panel" id="panel-inventario">
     <div class="panel-head">
       <h2>Inventario</h2>
-      <p class="hint">Existencias actuales de materia prima y producto preparado. Puedes hacer ajustes manuales si detectas diferencias.</p>
+      <p class="hint">Existencias actuales de materia prima. Puedes hacer ajustes manuales si detectas diferencias por conteo físico.</p>
     </div>
 
     <h3 class="section-title">Materia prima</h3>
     <div class="table-wrap">
       <table class="data-table" id="rawInventoryTable">
         <thead><tr><th>Insumo</th><th>Existencia</th><th>Estado</th><th></th></tr></thead>
-        <tbody></tbody>
-      </table>
-    </div>
-
-    <h3 class="section-title">Producto preparado (listo para vender)</h3>
-    <div class="table-wrap">
-      <table class="data-table" id="finishedInventoryTable">
-        <thead><tr><th>Producto</th><th>Piezas</th><th>Carne usada (aprox.)</th><th>g/pieza prom.</th><th></th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -149,6 +146,13 @@
         <h3>Ventas por producto</h3>
         <table class="data-table" id="dailySalesTable">
           <thead><tr><th>Producto</th><th>Formato</th><th>Cantidad</th><th>Importe</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="table-wrap">
+        <h3>Cancelaciones del día (con nota documental)</h3>
+        <table class="data-table" id="dailyCancelTable">
+          <thead><tr><th>Hora</th><th>Detalle</th><th>Importe</th><th>Motivo</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>
@@ -232,7 +236,7 @@
       </div>
     </div>
 
-    <h3 class="section-title">Gramos de carne por pieza (referencia para ventas por kilo y sugerencia al preparar)</h3>
+    <h3 class="section-title">Gramos de carne por pieza (se descuenta de materia prima en cada venta)</h3>
     <div class="table-wrap">
       <table class="data-table" id="gramosTable">
         <thead><tr><th>Producto</th><th>g / pieza</th></tr></thead>
@@ -253,11 +257,19 @@
       </div>
     </div>
 
-    <h3 class="section-title">Parámetros de conversión y alertas</h3>
+    <h3 class="section-title">Tortillas — parámetros de conversión y alertas</h3>
     <div class="form-card">
       <div class="form-row">
-        <label for="gramosPorTortilla">Gramos de tortilla por pieza (taco/quesadilla)</label>
+        <label for="gramosPorTortilla">Gramos por tortilla (pieza física)</label>
         <input type="number" id="gramosPorTortilla" min="1" step="1">
+      </div>
+      <div class="form-row">
+        <label for="tortillasPorTaco">Tortillas por taco</label>
+        <input type="number" id="tortillasPorTaco" min="0" step="1">
+      </div>
+      <div class="form-row">
+        <label for="tortillasPorQuesadilla">Tortillas por quesadilla</label>
+        <input type="number" id="tortillasPorQuesadilla" min="0" step="1">
       </div>
       <div class="form-row">
         <label for="alertaStockBajo">Umbral de alerta de stock bajo — carne, guacamole, queso (kg)</label>
