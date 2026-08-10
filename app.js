@@ -824,6 +824,42 @@ function openDiscountDetailModal(ventasConDescuento, subtitle) {
   }, { wide: true });
 }
 
+// Los renglones de "Ventas por producto" están agrupados por producto (pueden venir de varios
+// tickets distintos), así que al hacer click se listan las ventas que lo incluyeron y desde ahí
+// se puede entrar al detalle completo de cada una (mismo patrón que el detalle de descuentos).
+function openProductSalesModal(ventas, productLabel, subtitle) {
+  const rowsHtml = ventas.length ? ventas.map(m => {
+    const it = m.items.find(x => x.label === productLabel);
+    return `
+    <tr class="row-clickable" data-view-sale="${m.id}">
+      <td>${fmtDateTime(m.ts)}</td>
+      <td>${num(it?.cantidad ?? 0, 2)}</td>
+      <td>${money(it?.subtotal ?? 0)}</td>
+      <td>${money(m.total)}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="4" class="field-hint">Sin ventas.</td></tr>';
+  const html = `
+    <h3>${productLabel}</h3>
+    <p class="modal-sub">${subtitle} · ${ventas.length} venta${ventas.length === 1 ? '' : 's'}</p>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead><tr><th>Fecha</th><th>Cant.</th><th>Importe</th><th>Total venta</th></tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    </div>
+    <p class="field-hint">Haz click en una fila para ver el detalle completo de esa venta.</p>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="productSalesClose">Cerrar</button>
+    </div>
+  `;
+  openModal(html, root => {
+    root.querySelector('#productSalesClose').addEventListener('click', closeModal);
+    root.querySelectorAll('[data-view-sale]').forEach(row => {
+      row.addEventListener('click', () => openSaleDetailModal(row.dataset.viewSale));
+    });
+  }, { wide: true });
+}
+
 /* ======================================================================
    TAB: COMPRAS (entradas de insumos)
    ====================================================================== */
@@ -985,10 +1021,10 @@ function getDailyReportData(date) {
   }));
   const rows = Object.values(agg).sort((a, b) => b.importe - a.importe);
   if (totalDescuentos > 0) {
-    rows.push({ label: `Descuentos otorgados (${ventasConDescuento.length})`, formato: null, cantidad: ventasConDescuento.length, importe: -totalDescuentos });
+    rows.push({ label: `Descuentos otorgados (${ventasConDescuento.length})`, formato: null, cantidad: ventasConDescuento.length, importe: -totalDescuentos, isDescuento: true });
   }
 
-  return { date, totalVendido, totalPiezasVendidas, totalCarneVendida, totalDescuentos, totalTicketsCount, totalCanceladas, totalCanceladasMonto, canceladasDelDia, ventasConDescuento, rows };
+  return { date, totalVendido, totalPiezasVendidas, totalCarneVendida, totalDescuentos, totalTicketsCount, totalCanceladas, totalCanceladasMonto, canceladasDelDia, ventasConDescuento, ventasDelDia, rows };
 }
 
 function renderDailyReport() {
@@ -1008,7 +1044,7 @@ function renderDailyReport() {
 
   const tbody = document.querySelector('#dailySalesTable tbody');
   tbody.innerHTML = data.rows.length ? data.rows.map(r => `
-    <tr><td>${r.label}</td><td>${formatoLabel(r.formato)}</td><td>${num(r.cantidad, 2)}</td><td>${money(r.importe)}</td></tr>
+    <tr class="row-clickable" ${r.isDescuento ? 'data-action="view-discounts-daily"' : `data-product-label="${r.label}"`}><td>${r.label}</td><td>${formatoLabel(r.formato)}</td><td>${num(r.cantidad, 2)}</td><td>${money(r.importe)}</td></tr>
   `).join('') : '<tr><td colspan="4" class="field-hint">Sin ventas en esta fecha.</td></tr>';
 
   const cancelTbody = document.querySelector('#dailyCancelTable tbody');
@@ -1051,10 +1087,10 @@ function getMonthlyReportData(month) {
   }));
   const rows = Object.values(agg).sort((a, b) => b.importe - a.importe);
   if (totalDescuentos > 0) {
-    rows.push({ label: `Descuentos otorgados (${ventasConDescuento.length})`, cantidad: ventasConDescuento.length, importe: -totalDescuentos });
+    rows.push({ label: `Descuentos otorgados (${ventasConDescuento.length})`, cantidad: ventasConDescuento.length, importe: -totalDescuentos, isDescuento: true });
   }
 
-  return { month, totalMes, porDia, diasConVenta, promedioDiario, maxDia, totalPiezas, totalDescuentos, totalCanceladas, totalCanceladasMonto, ventasConDescuento, rows };
+  return { month, totalMes, porDia, diasConVenta, promedioDiario, maxDia, totalPiezas, totalDescuentos, totalCanceladas, totalCanceladasMonto, ventasConDescuento, ventasDelMes, rows };
 }
 
 function renderMonthlyReport() {
@@ -1081,7 +1117,7 @@ function renderMonthlyReport() {
     </div>`).join('');
 
   document.querySelector('#monthlyProductTable tbody').innerHTML = data.rows.length
-    ? data.rows.map(r => `<tr><td>${r.label}</td><td>${num(r.cantidad, 2)}</td><td>${money(r.importe)}</td></tr>`).join('')
+    ? data.rows.map(r => `<tr class="row-clickable" ${r.isDescuento ? 'data-action="view-discounts-monthly"' : `data-product-label="${r.label}"`}><td>${r.label}</td><td>${num(r.cantidad, 2)}</td><td>${money(r.importe)}</td></tr>`).join('')
     : '<tr><td colspan="3" class="field-hint">Sin ventas en este mes.</td></tr>';
 }
 
@@ -1649,6 +1685,27 @@ function initEvents() {
       const month = document.getElementById('monthlyMonth').value || monthStr();
       const data = getMonthlyReportData(month);
       openDiscountDetailModal(data.ventasConDescuento, `Reporte mensual — ${data.month}`);
+      return;
+    }
+    const productRow = e.target.closest('[data-product-label]');
+    if (productRow) {
+      const label = productRow.dataset.productLabel;
+      let ventas, subtitle;
+      if (productRow.closest('#dailySalesTable')) {
+        const date = document.getElementById('dailyDate').value || todayStr();
+        const data = getDailyReportData(date);
+        ventas = data.ventasDelDia.filter(m => m.items.some(it => it.label === label));
+        subtitle = `Reporte diario — ${data.date}`;
+      } else if (productRow.closest('#monthlyProductTable')) {
+        const month = document.getElementById('monthlyMonth').value || monthStr();
+        const data = getMonthlyReportData(month);
+        ventas = data.ventasDelMes.filter(m => m.items.some(it => it.label === label));
+        subtitle = `Reporte mensual — ${data.month}`;
+      }
+      if (!ventas) return;
+      // Si solo hay una venta con este producto, se salta la lista intermedia y se va directo al detalle.
+      if (ventas.length === 1) openSaleDetailModal(ventas[0].id);
+      else openProductSalesModal(ventas, label, subtitle);
     }
   });
 
