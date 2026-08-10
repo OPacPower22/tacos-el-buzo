@@ -103,24 +103,30 @@ function defaultState() {
   };
 }
 
+// Combina un objeto de estado (de localStorage o de un respaldo importado) con los valores
+// por defecto, para que archivos guardados con versiones anteriores de la app (sin campos
+// nuevos como "alambre" o "tortillasHarina") sigan funcionando sin romper el resto del código.
+function mergeStateWithDefaults(parsed) {
+  const def = defaultState();
+  const settings = Object.assign(def.settings, parsed.settings);
+  settings.gramosPorProducto = Object.assign(def.settings.gramosPorProducto, parsed.settings?.gramosPorProducto);
+  settings.tortillasPorTipo = Object.assign(def.settings.tortillasPorTipo, parsed.settings?.tortillasPorTipo);
+  settings.alambre = Object.assign(def.settings.alambre, parsed.settings?.alambre);
+  return {
+    raw: Object.assign(def.raw, parsed.raw),
+    prices: Object.assign(def.prices, parsed.prices),
+    guacPrice: parsed.guacPrice ?? def.guacPrice,
+    alambrePrice: parsed.alambrePrice ?? def.alambrePrice,
+    settings,
+    movements: parsed.movements || [],
+  };
+}
+
 function loadState() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return defaultState();
-    const parsed = JSON.parse(raw);
-    const def = defaultState();
-    // merge shallow to survive future field additions
-    const settings = Object.assign(def.settings, parsed.settings);
-    settings.gramosPorProducto = Object.assign(def.settings.gramosPorProducto, parsed.settings?.gramosPorProducto);
-    settings.tortillasPorTipo = Object.assign(def.settings.tortillasPorTipo, parsed.settings?.tortillasPorTipo);
-    return {
-      raw: Object.assign(def.raw, parsed.raw),
-      prices: Object.assign(def.prices, parsed.prices),
-      guacPrice: parsed.guacPrice ?? def.guacPrice,
-      alambrePrice: parsed.alambrePrice ?? def.alambrePrice,
-      settings,
-      movements: parsed.movements || [],
-    };
+    return mergeStateWithDefaults(JSON.parse(raw));
   } catch (e) {
     console.error('Error cargando datos, se usa estado por defecto', e);
     return defaultState();
@@ -1507,8 +1513,8 @@ function bindConfigInputs() {
     reader.onload = () => {
       try {
         const parsed = JSON.parse(reader.result);
-        if (!parsed.raw || !parsed.finished) throw new Error('Formato inválido');
-        STATE = parsed;
+        if (!parsed.raw || !parsed.prices || !parsed.settings) throw new Error('Formato inválido');
+        STATE = mergeStateWithDefaults(parsed);
         save();
         toast('Respaldo importado correctamente');
         renderAll();
