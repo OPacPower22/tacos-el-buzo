@@ -284,6 +284,9 @@ main#app { max-width: 1100px; margin: 0 auto; padding: 20px 16px 80px; }
 .data-table td { padding: 10px 14px; border-bottom: 1px solid var(--gridline); font-variant-numeric: tabular-nums; }
 .data-table tbody tr:last-child td { border-bottom: none; }
 .data-table tbody tr:hover { background: var(--surface-sunken); }
+.data-table tbody tr.row-clickable { cursor: pointer; }
+.stat-tile.clickable { cursor: pointer; }
+.stat-tile.clickable:hover { border-color: var(--accent); }
 
 .tag { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }
 .tag.good { background: color-mix(in srgb, var(--status-good) 16%, transparent); color: var(--status-good); }
@@ -418,6 +421,9 @@ main#app { max-width: 1100px; margin: 0 auto; padding: 20px 16px 80px; }
   box-shadow: var(--shadow-2);
   max-height: 90vh;
   overflow-y: auto;
+}
+.modal.modal-wide {
+  max-width: 640px;
 }
 .modal h3 { margin: 0 0 4px; }
 .modal .modal-sub { color: var(--text-secondary); font-size: 13px; margin: 0 0 16px; }

@@ -38,11 +38,12 @@ const INSUMOS = [
   { id: 'tortillas', label: 'Tortillas',       unit: 'kg' },
   { id: 'guacamole', label: 'Guacamole preparado', unit: 'kg' },
   { id: 'queso',     label: 'Queso rallado',   unit: 'kg' },
+  { id: 'tortillasHarina', label: 'Tortillas de harina', unit: 'kg' },
 ];
 
 // Insumos que se registran/capturan en kg pero se guardan internamente en gramos
 // (igual que el guacamole), para tener precisión pieza a pieza.
-const GRAM_BASED_INSUMOS = ['guacamole', 'tortillas', 'queso'];
+const GRAM_BASED_INSUMOS = ['guacamole', 'tortillas', 'queso', 'tortillasHarina'];
 
 const MOVEMENT_LABELS = {
   compra: 'Compra',
@@ -75,9 +76,10 @@ function defaultState() {
   PROTEINS.forEach(p => { prices[p.id] = defaultPricesForProtein(p.id); });
   return {
     // tortillas y queso se guardan en gramos (como el guacamole); se compran por kg.
-    raw: { bistec: 5, longaniza: 5, arrachera: 3, ribeye: 2, tortillas: 10200, guacamole: 1500, queso: 1000 },
+    raw: { bistec: 5, longaniza: 5, arrachera: 3, ribeye: 2, tortillas: 10200, guacamole: 1500, queso: 1000, tortillasHarina: 2000 },
     prices,
     guacPrice: 35,
+    alambrePrice: 450,
     settings: {
       // Gramos de carne cruda por pieza (taco o quesadilla), verificado contra el Excel de operación:
       // arrachera/rib eye 40 g (~25 tacos/kg), bistec/longaniza 60 g (~16-17 tacos/kg).
@@ -92,6 +94,10 @@ function defaultState() {
       tortillasPorTipo: { ...TORTILLAS_POR_TIPO_DEFAULT },
       alertaStockBajoKg: 1,
       alertaTortillasKg: 2,
+      // Alambre: 750 g totales (190 g c/u de bistec, arrachera, longaniza y queso),
+      // servido con 4 tortillas de harina (tamaño distinto al de la tortilla de la quesadilla).
+      alambre: { bistec: 190, arrachera: 190, longaniza: 190, queso: 190, tortillas: 4, gramosPorTortilla: 45 },
+      alertaTortillasHarinaKg: 1,
     },
     movements: [],
   };
@@ -111,6 +117,7 @@ function loadState() {
       raw: Object.assign(def.raw, parsed.raw),
       prices: Object.assign(def.prices, parsed.prices),
       guacPrice: parsed.guacPrice ?? def.guacPrice,
+      alambrePrice: parsed.alambrePrice ?? def.alambrePrice,
       settings,
       movements: parsed.movements || [],
     };
@@ -145,6 +152,10 @@ function num(n, decimals = 0) {
 function proteinById(id) { return PROTEINS.find(p => p.id === id); }
 function tipoById(id) { return TIPOS.find(t => t.id === id); }
 function formatoById(id) { return FORMATOS.find(f => f.id === id); }
+function formatoLabel(formatoId) {
+  if (!formatoId) return '—';
+  return formatoById(formatoId)?.name || (formatoId === 'orden' ? 'Orden' : formatoId);
+}
 function todayStr(d = new Date()) {
   const y = d.getFullYear(), m = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
@@ -193,11 +204,33 @@ function piezasDisponiblesEstimadas(proteinId) {
   return Math.floor((STATE.raw[proteinId] * 1000) / gpp);
 }
 
+function alambreOrdenesDisponibles() {
+  const a = STATE.settings.alambre;
+  return Math.floor(Math.min(
+    (STATE.raw.bistec * 1000) / a.bistec,
+    (STATE.raw.arrachera * 1000) / a.arrachera,
+    (STATE.raw.longaniza * 1000) / a.longaniza,
+    STATE.raw.queso / a.queso,
+    STATE.raw.tortillasHarina / (a.tortillas * a.gramosPorTortilla),
+  ));
+}
+
 function computeSaleItemImpact(item) {
   // devuelve { piezas, gramos, gramosTortilla, quesoGramos } sin mutar el estado
   // (para preview del ticket y para aplicar/revertir contra materia prima cruda).
   if (item.protein === 'guacamole') {
     return { gramos: item.cantidad * 150 };
+  }
+  if (item.protein === 'alambre') {
+    const a = STATE.settings.alambre;
+    return {
+      gramos: (a.bistec + a.arrachera + a.longaniza) * item.cantidad,
+      gramosBistec: a.bistec * item.cantidad,
+      gramosArrachera: a.arrachera * item.cantidad,
+      gramosLonganiza: a.longaniza * item.cantidad,
+      gramosQueso: a.queso * item.cantidad,
+      gramosTortillaHarina: a.tortillas * a.gramosPorTortilla * item.cantidad,
+    };
   }
   const gpp = gramosPorPieza(STATE, item.protein);
   let piezas;
@@ -224,6 +257,16 @@ function applySaleItem(item) {
     item.impact = impact;
     return impact;
   }
+  if (item.protein === 'alambre') {
+    const impact = computeSaleItemImpact(item);
+    STATE.raw.bistec -= impact.gramosBistec / 1000;
+    STATE.raw.arrachera -= impact.gramosArrachera / 1000;
+    STATE.raw.longaniza -= impact.gramosLonganiza / 1000;
+    STATE.raw.queso -= impact.gramosQueso;
+    STATE.raw.tortillasHarina -= impact.gramosTortillaHarina;
+    item.impact = impact;
+    return impact;
+  }
   const impact = computeSaleItemImpact(item);
   const p = proteinById(item.protein);
   if (p.combo) {
@@ -245,6 +288,14 @@ function reverseSaleItemImpact(item) {
   const impact = item.impact || computeSaleItemImpact(item);
   if (item.protein === 'guacamole') {
     STATE.raw.guacamole += impact.gramos;
+    return;
+  }
+  if (item.protein === 'alambre') {
+    STATE.raw.bistec += impact.gramosBistec / 1000;
+    STATE.raw.arrachera += impact.gramosArrachera / 1000;
+    STATE.raw.longaniza += impact.gramosLonganiza / 1000;
+    STATE.raw.queso += impact.gramosQueso;
+    STATE.raw.tortillasHarina += impact.gramosTortillaHarina;
     return;
   }
   const p = proteinById(item.protein);
@@ -270,8 +321,9 @@ function applyPurchase(insumoId, cantidad) {
 const modalBackdrop = document.getElementById('modalBackdrop');
 const modalEl = document.getElementById('modal');
 
-function openModal(html, onMount) {
+function openModal(html, onMount, { wide = false } = {}) {
   modalEl.innerHTML = html;
+  modalEl.classList.toggle('modal-wide', wide);
   modalBackdrop.classList.add('open');
   if (onMount) onMount(modalEl);
 }
@@ -307,7 +359,9 @@ function renderSellGrid() {
   }).join('');
 
   const guacLow = STATE.raw.guacamole <= 0;
-  const guacCard = `
+  const alambreOrdenes = alambreOrdenesDisponibles();
+  const alambreLow = alambreOrdenes <= 0;
+  const otrosCard = `
     <h3 class="section-title">Otros</h3>
     <div class="grid-buttons">
       <div class="product-btn" data-protein="guacamole">
@@ -318,9 +372,17 @@ function renderSellGrid() {
           <button class="btn btn-sm" data-action="sell-guac">Orden 150g<br><span class="field-hint">${money(STATE.guacPrice)}</span></button>
         </div>
       </div>
+      <div class="product-btn" data-protein="alambre">
+        <div class="p-icon">🍢</div>
+        <div class="p-name">Alambre</div>
+        <div class="p-stock ${alambreLow ? 'low' : ''}">~${num(alambreOrdenes)} órdenes disponibles (materia prima)</div>
+        <div class="format-buttons">
+          <button class="btn btn-sm" data-action="sell-alambre">Orden 750g<br><span class="field-hint">${money(STATE.alambrePrice)}</span></button>
+        </div>
+      </div>
     </div>`;
 
-  grid.innerHTML = sections + guacCard;
+  grid.innerHTML = sections + otrosCard;
 }
 
 function openSellModal(proteinId, tipoId, formatoId) {
@@ -415,6 +477,42 @@ function openGuacSellModal() {
       const cantidad = Number(qtyInput.value) || 0;
       if (cantidad <= 0) { toast('Captura una cantidad mayor a cero'); return; }
       TICKET.push({ id: uid(), protein: 'guacamole', tipo: null, formato: 'orden', cantidad, precioUnit: STATE.guacPrice, subtotal: STATE.guacPrice * cantidad, label: 'Guacamole — orden 150g' });
+      renderTicket();
+      closeModal();
+    });
+  });
+}
+
+function openAlambreSellModal() {
+  const ordenesDisponibles = alambreOrdenesDisponibles();
+  const html = `
+    <h3>Alambre — Orden 750 g</h3>
+    <p class="modal-sub">Disponible (aprox.): ~${num(ordenesDisponibles)} órdenes · Precio: ${money(STATE.alambrePrice)} / orden</p>
+    <p class="field-hint">190 g c/u de bistec, arrachera, longaniza y queso, preparado con cebolla y pimiento. Servido con 4 tortillas de harina.</p>
+    <div class="form-row">
+      <label for="alambreQty">Número de órdenes</label>
+      <input type="number" id="alambreQty" min="0" step="1" value="1">
+    </div>
+    <div class="form-row"><strong id="alambreSubtotal">Subtotal: ${money(STATE.alambrePrice)}</strong></div>
+    <div id="alambreWarn"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="alambreCancel">Cancelar</button>
+      <button class="btn btn-primary" id="alambreAdd">Agregar al ticket</button>
+    </div>
+  `;
+  openModal(html, root => {
+    const qtyInput = root.querySelector('#alambreQty');
+    const sub = root.querySelector('#alambreSubtotal');
+    qtyInput.addEventListener('input', () => { sub.textContent = `Subtotal: ${money(STATE.alambrePrice * (Number(qtyInput.value) || 0))}`; });
+    root.querySelector('#alambreCancel').addEventListener('click', closeModal);
+    root.querySelector('#alambreAdd').addEventListener('click', () => {
+      const cantidad = Number(qtyInput.value) || 0;
+      if (cantidad <= 0) { toast('Captura una cantidad mayor a cero'); return; }
+      const item = { id: uid(), protein: 'alambre', tipo: null, formato: 'orden', cantidad, precioUnit: STATE.alambrePrice, subtotal: STATE.alambrePrice * cantidad, label: 'Alambre — orden 750g' };
+      if (cantidad > ordenesDisponibles) {
+        root.querySelector('#alambreWarn').innerHTML = '<div class="warn-box">⚠️ La materia prima disponible no alcanza para esta venta. Se agregará de todas formas.</div>';
+      }
+      TICKET.push(item);
       renderTicket();
       closeModal();
     });
@@ -650,6 +748,76 @@ function requestCancelSale(id) {
   });
 }
 
+function openSaleDetailModal(saleId) {
+  const sale = findSale(saleId);
+  if (!sale) return;
+  const itemsHtml = sale.items.map(it => `
+    <tr>
+      <td>${it.label}${it.conQueso ? ' <span class="field-hint">(c/queso)</span>' : ''}</td>
+      <td>${num(it.cantidad, 2)}</td>
+      <td>${money(it.precioUnit)}</td>
+      <td>${money(it.subtotal)}</td>
+    </tr>`).join('');
+  const cancelInfo = sale.cancelled
+    ? `<div class="warn-box">⚠️ Venta cancelada el ${fmtDateTime(sale.canceledAt)}${cancelNotaFor(sale.id) ? ` — ${cancelNotaFor(sale.id)}` : ''}</div>`
+    : '';
+  const discountHtml = sale.discount
+    ? `<div class="form-row"><strong>Descuento${sale.discount.type === 'percent' ? ` (${num(sale.discount.value, 2)}%)` : ''}:</strong> -${money(sale.discount.amount)}${sale.discount.nota ? ` — ${sale.discount.nota}` : ''}</div>`
+    : '';
+  const html = `
+    <h3>Detalle de venta</h3>
+    <p class="modal-sub">${fmtDateTime(sale.ts)}</p>
+    ${cancelInfo}
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead><tr><th>Producto</th><th>Cant.</th><th>Precio</th><th>Subtotal</th></tr></thead>
+        <tbody>${itemsHtml}</tbody>
+      </table>
+    </div>
+    <div class="form-row"><strong>Subtotal: ${money(sale.subtotal)}</strong></div>
+    ${discountHtml}
+    <div class="form-row"><strong>Total: ${money(sale.total)}</strong></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="saleDetailClose">Cerrar</button>
+    </div>
+  `;
+  openModal(html, root => {
+    root.querySelector('#saleDetailClose').addEventListener('click', closeModal);
+  }, { wide: true });
+}
+
+function openDiscountDetailModal(ventasConDescuento, subtitle) {
+  const totalDescuentos = ventasConDescuento.reduce((s, m) => s + (m.discount?.amount || 0), 0);
+  const rowsHtml = ventasConDescuento.length ? ventasConDescuento.map(m => `
+    <tr class="row-clickable" data-view-sale="${m.id}">
+      <td>${fmtDateTime(m.ts)}</td>
+      <td>${m.discount.type === 'percent' ? `${num(m.discount.value, 2)}%` : money(m.discount.value)}</td>
+      <td>${m.discount.nota || '—'}</td>
+      <td>-${money(m.discount.amount)}</td>
+      <td>${money(m.total)}</td>
+    </tr>`).join('') : '<tr><td colspan="5" class="field-hint">Sin descuentos en este periodo.</td></tr>';
+  const html = `
+    <h3>Detalle de descuentos</h3>
+    <p class="modal-sub">${subtitle} · Total: ${money(totalDescuentos)}</p>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead><tr><th>Fecha</th><th>Descuento</th><th>Motivo</th><th>Monto</th><th>Total venta</th></tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table>
+    </div>
+    <p class="field-hint">Haz click en una fila para ver el detalle completo de esa venta.</p>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="discountDetailClose">Cerrar</button>
+    </div>
+  `;
+  openModal(html, root => {
+    root.querySelector('#discountDetailClose').addEventListener('click', closeModal);
+    root.querySelectorAll('[data-view-sale]').forEach(row => {
+      row.addEventListener('click', () => openSaleDetailModal(row.dataset.viewSale));
+    });
+  }, { wide: true });
+}
+
 /* ======================================================================
    TAB: COMPRAS (entradas de insumos)
    ====================================================================== */
@@ -710,6 +878,7 @@ function renderInventory() {
     { id: 'tortillas', label: 'Tortillas', value: STATE.raw.tortillas / 1000, unit: 'kg', threshold: s.alertaTortillasKg },
     { id: 'guacamole', label: 'Guacamole preparado', value: STATE.raw.guacamole / 1000, unit: 'kg', threshold: s.alertaStockBajoKg },
     { id: 'queso', label: 'Queso rallado', value: STATE.raw.queso / 1000, unit: 'kg', threshold: s.alertaStockBajoKg },
+    { id: 'tortillasHarina', label: 'Tortillas de harina', value: STATE.raw.tortillasHarina / 1000, unit: 'kg', threshold: s.alertaTortillasHarinaKg },
   ];
   rawTbody.innerHTML = rawRows.map(r => `
     <tr>
@@ -793,9 +962,10 @@ function getDailyReportData(date) {
   const canceladasDelDia = STATE.movements.filter(m => m.type === 'venta' && m.cancelled && todayStr(new Date(m.ts)) === date);
 
   const totalVendido = ventasDelDia.reduce((s, m) => s + m.total, 0);
-  const totalPiezasVendidas = ventasDelDia.reduce((s, m) => s + m.items.reduce((s2, it) => s2 + (it.protein === 'guacamole' ? 0 : it.cantidad), 0), 0);
+  const totalPiezasVendidas = ventasDelDia.reduce((s, m) => s + m.items.reduce((s2, it) => s2 + (it.protein === 'guacamole' || it.protein === 'alambre' ? 0 : it.cantidad), 0), 0);
   const totalCarneVendida = ventasDelDia.reduce((s, m) => s + m.items.reduce((s2, it) => s2 + (it.protein === 'guacamole' ? 0 : (it.impact?.gramos || 0)), 0), 0);
-  const totalDescuentos = ventasDelDia.reduce((s, m) => s + (m.discount?.amount || 0), 0);
+  const ventasConDescuento = ventasDelDia.filter(m => m.discount);
+  const totalDescuentos = ventasConDescuento.reduce((s, m) => s + (m.discount?.amount || 0), 0);
   const totalTicketsCount = ventasDelDia.length;
   const totalCanceladas = canceladasDelDia.length;
   const totalCanceladasMonto = canceladasDelDia.reduce((s, m) => s + m.total, 0);
@@ -808,8 +978,11 @@ function getDailyReportData(date) {
     agg[key].importe += it.subtotal;
   }));
   const rows = Object.values(agg).sort((a, b) => b.importe - a.importe);
+  if (totalDescuentos > 0) {
+    rows.push({ label: `Descuentos otorgados (${ventasConDescuento.length})`, formato: null, cantidad: ventasConDescuento.length, importe: -totalDescuentos });
+  }
 
-  return { date, totalVendido, totalPiezasVendidas, totalCarneVendida, totalDescuentos, totalTicketsCount, totalCanceladas, totalCanceladasMonto, canceladasDelDia, rows };
+  return { date, totalVendido, totalPiezasVendidas, totalCarneVendida, totalDescuentos, totalTicketsCount, totalCanceladas, totalCanceladasMonto, canceladasDelDia, ventasConDescuento, rows };
 }
 
 function renderDailyReport() {
@@ -823,13 +996,13 @@ function renderDailyReport() {
     <div class="stat-tile"><div class="st-label">Tickets cobrados</div><div class="st-value">${num(data.totalTicketsCount)}</div></div>
     <div class="stat-tile"><div class="st-label">Piezas / porciones vendidas</div><div class="st-value">${num(data.totalPiezasVendidas)}</div></div>
     <div class="stat-tile"><div class="st-label">Carne vendida</div><div class="st-value">${num(data.totalCarneVendida / 1000, 2)} kg</div></div>
-    <div class="stat-tile"><div class="st-label">Descuentos otorgados</div><div class="st-value">${money(data.totalDescuentos)}</div></div>
+    <div class="stat-tile clickable" data-action="view-discounts-daily" title="Ver detalle de descuentos"><div class="st-label">Descuentos otorgados</div><div class="st-value">${money(data.totalDescuentos)}</div></div>
     <div class="stat-tile"><div class="st-label">Ventas canceladas</div><div class="st-value">${num(data.totalCanceladas)} (${money(data.totalCanceladasMonto)})</div></div>
   `;
 
   const tbody = document.querySelector('#dailySalesTable tbody');
   tbody.innerHTML = data.rows.length ? data.rows.map(r => `
-    <tr><td>${r.label}</td><td>${formatoById(r.formato)?.name || (r.formato === 'orden' ? 'Orden 150g' : r.formato)}</td><td>${num(r.cantidad, 2)}</td><td>${money(r.importe)}</td></tr>
+    <tr><td>${r.label}</td><td>${formatoLabel(r.formato)}</td><td>${num(r.cantidad, 2)}</td><td>${money(r.importe)}</td></tr>
   `).join('') : '<tr><td colspan="4" class="field-hint">Sin ventas en esta fecha.</td></tr>';
 
   const cancelTbody = document.querySelector('#dailyCancelTable tbody');
@@ -858,8 +1031,9 @@ function getMonthlyReportData(month) {
   const diasConVenta = porDia.filter(v => v > 0).length;
   const promedioDiario = diasConVenta ? totalMes / diasConVenta : 0;
   const maxDia = porDia.reduce((best, v, i) => v > best.v ? { v, i } : best, { v: 0, i: -1 });
-  const totalPiezas = ventasDelMes.reduce((s, m) => s + m.items.reduce((s2, it) => s2 + (it.protein === 'guacamole' ? 0 : it.cantidad), 0), 0);
-  const totalDescuentos = ventasDelMes.reduce((s, m) => s + (m.discount?.amount || 0), 0);
+  const totalPiezas = ventasDelMes.reduce((s, m) => s + m.items.reduce((s2, it) => s2 + (it.protein === 'guacamole' || it.protein === 'alambre' ? 0 : it.cantidad), 0), 0);
+  const ventasConDescuento = ventasDelMes.filter(m => m.discount);
+  const totalDescuentos = ventasConDescuento.reduce((s, m) => s + (m.discount?.amount || 0), 0);
   const totalCanceladas = canceladasDelMes.length;
   const totalCanceladasMonto = canceladasDelMes.reduce((s, m) => s + m.total, 0);
 
@@ -870,8 +1044,11 @@ function getMonthlyReportData(month) {
     agg[it.label].importe += it.subtotal;
   }));
   const rows = Object.values(agg).sort((a, b) => b.importe - a.importe);
+  if (totalDescuentos > 0) {
+    rows.push({ label: `Descuentos otorgados (${ventasConDescuento.length})`, cantidad: ventasConDescuento.length, importe: -totalDescuentos });
+  }
 
-  return { month, totalMes, porDia, diasConVenta, promedioDiario, maxDia, totalPiezas, totalDescuentos, totalCanceladas, totalCanceladasMonto, rows };
+  return { month, totalMes, porDia, diasConVenta, promedioDiario, maxDia, totalPiezas, totalDescuentos, totalCanceladas, totalCanceladasMonto, ventasConDescuento, rows };
 }
 
 function renderMonthlyReport() {
@@ -885,7 +1062,7 @@ function renderMonthlyReport() {
     <div class="stat-tile"><div class="st-label">Promedio diario (días con venta)</div><div class="st-value">${money(data.promedioDiario)}</div></div>
     <div class="stat-tile"><div class="st-label">Mejor día</div><div class="st-value">${data.maxDia.i >= 0 ? `Día ${data.maxDia.i + 1} — ${money(data.maxDia.v)}` : '—'}</div></div>
     <div class="stat-tile"><div class="st-label">Piezas / porciones vendidas</div><div class="st-value">${num(data.totalPiezas)}</div></div>
-    <div class="stat-tile"><div class="st-label">Descuentos otorgados</div><div class="st-value">${money(data.totalDescuentos)}</div></div>
+    <div class="stat-tile clickable" data-action="view-discounts-monthly" title="Ver detalle de descuentos"><div class="st-label">Descuentos otorgados</div><div class="st-value">${money(data.totalDescuentos)}</div></div>
     <div class="stat-tile"><div class="st-label">Ventas canceladas</div><div class="st-value">${num(data.totalCanceladas)} (${money(data.totalCanceladasMonto)})</div></div>
   `;
 
@@ -902,13 +1079,26 @@ function renderMonthlyReport() {
     : '<tr><td colspan="3" class="field-hint">Sin ventas en este mes.</td></tr>';
 }
 
-function renderHistory() {
+// Filtra movimientos por tipo y por rango de fechas (inclusivo), usando la fecha local
+// de cada movimiento para que coincida con lo que el usuario ve/selecciona en los inputs.
+function filterHistoryMovements() {
   const filter = document.getElementById('historyFilter').value;
-  const rows = STATE.movements
-    .filter(m => filter === 'todos' || m.type === filter)
+  const from = document.getElementById('historyFrom').value;
+  const to = document.getElementById('historyTo').value;
+  return STATE.movements.filter(m => {
+    if (filter !== 'todos' && m.type !== filter) return false;
+    const d = todayStr(new Date(m.ts));
+    if (from && d < from) return false;
+    if (to && d > to) return false;
+    return true;
+  });
+}
+
+function renderHistory() {
+  const rows = filterHistoryMovements()
     .slice()
     .reverse()
-    .slice(0, 200);
+    .slice(0, 500);
   const tbody = document.querySelector('#historyTable tbody');
   tbody.innerHTML = rows.length ? rows.map(m => {
     let actions = '';
@@ -917,8 +1107,10 @@ function renderHistory() {
         ? '<span class="tag critical">Cancelada</span>'
         : `<button class="btn btn-ghost btn-sm" data-edit-sale="${m.id}">Editar</button> <button class="btn btn-ghost btn-sm" data-cancel-sale="${m.id}">Cancelar</button>`;
     }
+    // Las ventas y sus cancelaciones abren el detalle de la venta original al hacer click en la fila.
+    const viewSaleId = m.type === 'venta' ? m.id : m.type === 'cancelacion_venta' ? m.saleId : null;
     return `
-    <tr>
+    <tr${viewSaleId ? ` class="row-clickable" data-view-sale="${viewSaleId}"` : ''}>
       <td>${fmtDateTime(m.ts)}</td>
       <td><span class="tag good">${MOVEMENT_LABELS[m.type]}</span></td>
       <td>${movementDetailText(m)}</td>
@@ -966,7 +1158,7 @@ function printDailyReport() {
   const date = document.getElementById('dailyDate').value || todayStr();
   const data = getDailyReportData(date);
   const rowsHtml = data.rows.length
-    ? data.rows.map(r => `<tr><td>${r.label}</td><td>${formatoById(r.formato)?.name || (r.formato === 'orden' ? 'Orden 150g' : r.formato)}</td><td>${num(r.cantidad, 2)}</td><td>${money(r.importe)}</td></tr>`).join('')
+    ? data.rows.map(r => `<tr><td>${r.label}</td><td>${formatoLabel(r.formato)}</td><td>${num(r.cantidad, 2)}</td><td>${money(r.importe)}</td></tr>`).join('')
     : '<tr><td colspan="4">Sin ventas en esta fecha.</td></tr>';
   const html = printHtml(`Reporte diario — ${data.date}`, `
     <div class="print-stats">
@@ -1003,8 +1195,7 @@ function printMonthlyReport() {
 }
 
 function printHistoryReport() {
-  const filter = document.getElementById('historyFilter').value;
-  const rows = STATE.movements.filter(m => filter === 'todos' || m.type === filter).slice().reverse().slice(0, 200);
+  const rows = filterHistoryMovements().slice().reverse();
   const rowsHtml = rows.length
     ? rows.map(m => `<tr><td>${fmtDateTime(m.ts)}</td><td>${MOVEMENT_LABELS[m.type]}</td><td>${movementDetailText(m)}</td><td>${m.type === 'venta' ? money(m.total) : ''}</td></tr>`).join('')
     : '<tr><td colspan="4">Sin movimientos.</td></tr>';
@@ -1166,7 +1357,7 @@ function shareDailyReportWhatsApp() {
       { label: 'Canceladas', value: `${num(data.totalCanceladas)} (${money(data.totalCanceladasMonto)})` },
     ],
     columns: [{ label: 'Producto', width: 0.4 }, { label: 'Formato', width: 0.22 }, { label: 'Cant.', width: 0.16 }, { label: 'Importe', width: 0.22 }],
-    rows: data.rows.map(r => [r.label, formatoById(r.formato)?.name || (r.formato === 'orden' ? 'Orden 150g' : r.formato), num(r.cantidad, 2), money(r.importe)]),
+    rows: data.rows.map(r => [r.label, formatoLabel(r.formato), num(r.cantidad, 2), money(r.importe)]),
     footerLines: [`Generado el ${fmtDateTime(Date.now())}`],
   });
   const text = `📋 *Reporte diario — ${data.date}*\n💰 Ventas: ${money(data.totalVendido)} · 🧾 Tickets: ${num(data.totalTicketsCount)}\nImagen del reporte adjunta.`;
@@ -1196,10 +1387,13 @@ function shareMonthlyReportWhatsApp() {
 
 function shareHistoryReportWhatsApp() {
   const filter = document.getElementById('historyFilter').value;
-  const rows = STATE.movements.filter(m => filter === 'todos' || m.type === filter).slice().reverse().slice(0, 30);
+  const from = document.getElementById('historyFrom').value;
+  const to = document.getElementById('historyTo').value;
+  const rows = filterHistoryMovements().slice().reverse().slice(0, 30);
+  const rango = from || to ? ` · ${from || '…'} a ${to || '…'}` : '';
   const canvas = buildReportCanvas({
     title: 'Historial de movimientos',
-    subtitle: `Filtro: ${filter === 'todos' ? 'Todos' : MOVEMENT_LABELS[filter]} · últimos ${rows.length}`,
+    subtitle: `Filtro: ${filter === 'todos' ? 'Todos' : MOVEMENT_LABELS[filter]}${rango} · últimos ${rows.length}`,
     columns: [{ label: 'Fecha', width: 0.2 }, { label: 'Tipo', width: 0.18 }, { label: 'Detalle', width: 0.44 }, { label: 'Importe', width: 0.18 }],
     rows: rows.map(m => [fmtDateTime(m.ts), MOVEMENT_LABELS[m.type], movementDetailText(m), m.type === 'venta' ? money(m.total) : '']),
     footerLines: [`Generado el ${fmtDateTime(Date.now())}`],
@@ -1265,6 +1459,14 @@ function renderConfigMisc() {
   document.getElementById('tortillasPorQuesadilla').value = STATE.settings.tortillasPorTipo.quesadilla;
   document.getElementById('alertaStockBajo').value = STATE.settings.alertaStockBajoKg;
   document.getElementById('alertaTortillasKg').value = STATE.settings.alertaTortillasKg;
+  document.getElementById('alambrePrecio').value = STATE.alambrePrice;
+  document.getElementById('alambreBistec').value = STATE.settings.alambre.bistec;
+  document.getElementById('alambreArrachera').value = STATE.settings.alambre.arrachera;
+  document.getElementById('alambreLonganiza').value = STATE.settings.alambre.longaniza;
+  document.getElementById('alambreQueso').value = STATE.settings.alambre.queso;
+  document.getElementById('alambreTortillas').value = STATE.settings.alambre.tortillas;
+  document.getElementById('alambreGramosPorTortilla').value = STATE.settings.alambre.gramosPorTortilla;
+  document.getElementById('alertaTortillasHarinaKg').value = STATE.settings.alertaTortillasHarinaKg;
 }
 
 function bindConfigInputs() {
@@ -1278,6 +1480,14 @@ function bindConfigInputs() {
   document.getElementById('tortillasPorQuesadilla').addEventListener('change', e => { STATE.settings.tortillasPorTipo.quesadilla = Number(e.target.value) || 0; save(); });
   document.getElementById('alertaStockBajo').addEventListener('change', e => { STATE.settings.alertaStockBajoKg = Number(e.target.value) || 0; save(); renderInventory(); });
   document.getElementById('alertaTortillasKg').addEventListener('change', e => { STATE.settings.alertaTortillasKg = Number(e.target.value) || 0; save(); renderInventory(); });
+  document.getElementById('alambrePrecio').addEventListener('change', e => { STATE.alambrePrice = Number(e.target.value) || 0; save(); renderSellGrid(); });
+  document.getElementById('alambreBistec').addEventListener('change', e => { STATE.settings.alambre.bistec = Number(e.target.value) || 1; save(); renderSellGrid(); });
+  document.getElementById('alambreArrachera').addEventListener('change', e => { STATE.settings.alambre.arrachera = Number(e.target.value) || 1; save(); renderSellGrid(); });
+  document.getElementById('alambreLonganiza').addEventListener('change', e => { STATE.settings.alambre.longaniza = Number(e.target.value) || 1; save(); renderSellGrid(); });
+  document.getElementById('alambreQueso').addEventListener('change', e => { STATE.settings.alambre.queso = Number(e.target.value) || 1; save(); renderSellGrid(); });
+  document.getElementById('alambreTortillas').addEventListener('change', e => { STATE.settings.alambre.tortillas = Number(e.target.value) || 0; save(); renderSellGrid(); });
+  document.getElementById('alambreGramosPorTortilla').addEventListener('change', e => { STATE.settings.alambre.gramosPorTortilla = Number(e.target.value) || 1; save(); renderSellGrid(); });
+  document.getElementById('alertaTortillasHarinaKg').addEventListener('change', e => { STATE.settings.alertaTortillasHarinaKg = Number(e.target.value) || 0; save(); renderInventory(); });
 
   document.getElementById('exportBtn').addEventListener('click', () => {
     const blob = new Blob([JSON.stringify(STATE, null, 2)], { type: 'application/json' });
@@ -1365,6 +1575,8 @@ function initEvents() {
     if (sellBtn) { openSellModal(sellBtn.dataset.protein, sellBtn.dataset.tipo, sellBtn.dataset.formato); return; }
     const guacBtn = e.target.closest('[data-action="sell-guac"]');
     if (guacBtn) openGuacSellModal();
+    const alambreBtn = e.target.closest('[data-action="sell-alambre"]');
+    if (alambreBtn) openAlambreSellModal();
   });
 
   document.getElementById('ticketItems').addEventListener('click', e => {
@@ -1386,7 +1598,9 @@ function initEvents() {
     const editBtn = e.target.closest('[data-edit-sale]');
     if (editBtn) { startEditSale(editBtn.dataset.editSale); return; }
     const cancelBtn = e.target.closest('[data-cancel-sale]');
-    if (cancelBtn) requestCancelSale(cancelBtn.dataset.cancelSale);
+    if (cancelBtn) { requestCancelSale(cancelBtn.dataset.cancelSale); return; }
+    const row = e.target.closest('[data-view-sale]');
+    if (row) openSaleDetailModal(row.dataset.viewSale);
   });
 
   document.getElementById('rawInventoryTable').addEventListener('click', e => {
@@ -1397,19 +1611,39 @@ function initEvents() {
   document.getElementById('dailyDate').addEventListener('change', renderDailyReport);
   document.getElementById('monthlyMonth').addEventListener('change', renderMonthlyReport);
   document.getElementById('historyFilter').addEventListener('change', renderHistory);
+  document.getElementById('historyFrom').addEventListener('change', renderHistory);
+  document.getElementById('historyTo').addEventListener('change', renderHistory);
+  document.getElementById('historyClearDates').addEventListener('click', () => {
+    document.getElementById('historyFrom').value = '';
+    document.getElementById('historyTo').value = '';
+    renderHistory();
+  });
 
   document.getElementById('panel-reportes').addEventListener('click', e => {
     const btn = e.target.closest('[data-report-action]');
-    if (!btn) return;
-    const actions = {
-      'print-diario': printDailyReport,
-      'whatsapp-diario': shareDailyReportWhatsApp,
-      'print-mensual': printMonthlyReport,
-      'whatsapp-mensual': shareMonthlyReportWhatsApp,
-      'print-historial': printHistoryReport,
-      'whatsapp-historial': shareHistoryReportWhatsApp,
-    };
-    actions[btn.dataset.reportAction]?.();
+    if (btn) {
+      const actions = {
+        'print-diario': printDailyReport,
+        'whatsapp-diario': shareDailyReportWhatsApp,
+        'print-mensual': printMonthlyReport,
+        'whatsapp-mensual': shareMonthlyReportWhatsApp,
+        'print-historial': printHistoryReport,
+        'whatsapp-historial': shareHistoryReportWhatsApp,
+      };
+      actions[btn.dataset.reportAction]?.();
+      return;
+    }
+    if (e.target.closest('[data-action="view-discounts-daily"]')) {
+      const date = document.getElementById('dailyDate').value || todayStr();
+      const data = getDailyReportData(date);
+      openDiscountDetailModal(data.ventasConDescuento, `Reporte diario — ${data.date}`);
+      return;
+    }
+    if (e.target.closest('[data-action="view-discounts-monthly"]')) {
+      const month = document.getElementById('monthlyMonth').value || monthStr();
+      const data = getMonthlyReportData(month);
+      openDiscountDetailModal(data.ventasConDescuento, `Reporte mensual — ${data.month}`);
+    }
   });
 
   bindConfigInputs();
