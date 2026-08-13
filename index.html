@@ -47,8 +47,11 @@
         <button class="btn btn-ghost" id="clearTicketBtn">Vaciar</button>
       </div>
       <div id="editBanner" class="edit-banner" style="display:none">
-        <span>✏️ Editando una venta ya cobrada. Al guardar, se reemplaza la venta original y se ajusta el inventario.</span>
-        <button class="btn btn-ghost btn-sm" id="cancelEditBtn">Cancelar edición</button>
+        <div class="edit-banner-row">
+          <span>✏️ Editando una venta ya cobrada. Al guardar, se reemplaza la venta original y se ajusta el inventario.</span>
+          <button class="btn btn-ghost btn-sm" id="cancelEditBtn">Cancelar edición</button>
+        </div>
+        <input type="text" id="editSaleNote" class="edit-banner-note" placeholder="Motivo de la edición (opcional)">
       </div>
       <div id="ticketItems" class="ticket-items"><p class="empty">Sin artículos todavía.</p></div>
       <div class="ticket-subtotal" id="ticketSubtotalRow" style="display:none">
@@ -171,6 +174,10 @@
       <div class="chart-wrap">
         <h3>Ventas por día</h3>
         <div id="monthlyChart" class="bar-chart"></div>
+      </div>
+      <div class="chart-wrap">
+        <h3>Venta por producto</h3>
+        <div id="monthlyProductChart" class="hbar-chart"></div>
       </div>
       <div class="table-wrap">
         <h3>Totales por producto en el mes</h3>

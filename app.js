@@ -677,6 +677,7 @@ function startEditSale(id) {
   TICKET_DISCOUNT = sale.discount ? { type: sale.discount.type, value: sale.discount.value, nota: sale.discount.nota } : null;
   document.querySelector('.tab-btn[data-tab="vender"]').click();
   renderTicket();
+  document.getElementById('editSaleNote').value = sale.editNota || '';
   toast('Editando venta: modifica los artículos y presiona "Guardar cambios"');
 }
 
@@ -684,6 +685,7 @@ function cancelEditSale() {
   EDITING_SALE_ID = null;
   TICKET = [];
   TICKET_DISCOUNT = null;
+  document.getElementById('editSaleNote').value = '';
   renderTicket();
 }
 
@@ -695,6 +697,7 @@ function saveEditedSale() {
     return;
   }
   // Revierte el impacto original y aplica el de los artículos editados.
+  const nota = document.getElementById('editSaleNote').value.trim();
   sale.items.forEach(reverseSaleItemImpact);
   TICKET.forEach(applySaleItem);
   const subtotal = ticketSubtotal();
@@ -705,12 +708,14 @@ function saveEditedSale() {
   sale.discount = TICKET_DISCOUNT ? { type: TICKET_DISCOUNT.type, value: TICKET_DISCOUNT.value, amount: discountAmount, nota: TICKET_DISCOUNT.nota } : null;
   sale.total = total;
   sale.editedAt = Date.now();
-  pushMovement('edicion_venta', { saleId: sale.id, total });
+  sale.editNota = nota;
+  pushMovement('edicion_venta', { saleId: sale.id, total, nota });
   save();
   toast('Venta actualizada e inventario ajustado');
   EDITING_SALE_ID = null;
   TICKET = [];
   TICKET_DISCOUNT = null;
+  document.getElementById('editSaleNote').value = '';
   renderTicket();
   renderSellGrid();
   renderInventory();
@@ -767,13 +772,20 @@ function openSaleDetailModal(saleId) {
   const cancelInfo = sale.cancelled
     ? `<div class="warn-box">⚠️ Venta cancelada el ${fmtDateTime(sale.canceledAt)}${cancelNotaFor(sale.id) ? ` — ${cancelNotaFor(sale.id)}` : ''}</div>`
     : '';
+  const editInfo = sale.editedAt
+    ? `<p class="field-hint">✏️ Editada el ${fmtDateTime(sale.editedAt)}${sale.editNota ? ` — ${sale.editNota}` : ''}</p>`
+    : '';
   const discountHtml = sale.discount
     ? `<div class="form-row"><strong>Descuento${sale.discount.type === 'percent' ? ` (${num(sale.discount.value, 2)}%)` : ''}:</strong> -${money(sale.discount.amount)}${sale.discount.nota ? ` — ${sale.discount.nota}` : ''}</div>`
     : '';
+  const actionsHtml = sale.cancelled ? '' : `
+      <button class="btn btn-ghost" id="saleDetailEdit">✏️ Editar venta</button>
+      <button class="btn btn-danger" id="saleDetailCancel">🗑️ Cancelar venta</button>`;
   const html = `
     <h3>Detalle de venta</h3>
     <p class="modal-sub">${fmtDateTime(sale.ts)}</p>
     ${cancelInfo}
+    ${editInfo}
     <div class="table-wrap">
       <table class="data-table">
         <thead><tr><th>Producto</th><th>Cant.</th><th>Precio</th><th>Subtotal</th></tr></thead>
@@ -785,10 +797,13 @@ function openSaleDetailModal(saleId) {
     <div class="form-row"><strong>Total: ${money(sale.total)}</strong></div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="saleDetailClose">Cerrar</button>
+      ${actionsHtml}
     </div>
   `;
   openModal(html, root => {
     root.querySelector('#saleDetailClose').addEventListener('click', closeModal);
+    root.querySelector('#saleDetailEdit')?.addEventListener('click', () => { closeModal(); startEditSale(sale.id); });
+    root.querySelector('#saleDetailCancel')?.addEventListener('click', () => { closeModal(); requestCancelSale(sale.id); });
   }, { wide: true });
 }
 
@@ -991,7 +1006,7 @@ function movementDetailText(m) {
       : `${m.key.replace('|', ' / ')}: piezas ${m.deltaPiezas >= 0 ? '+' : ''}${m.deltaPiezas}, gramos ${m.deltaGramos >= 0 ? '+' : ''}${num(m.deltaGramos)}${m.nota ? ' — ' + m.nota : ''}`;
   }
   if (m.type === 'edicion_venta') {
-    return `Venta editada · nuevo total ${money(m.total)}`;
+    return `Venta editada · nuevo total ${money(m.total)}${m.nota ? ' — ' + m.nota : ''}`;
   }
   if (m.type === 'cancelacion_venta') {
     return `Venta cancelada · ${money(m.total)}${m.nota ? ' — ' + m.nota : ''}`;
@@ -1115,6 +1130,17 @@ function renderMonthlyReport() {
       <div class="bar" style="height:${Math.max(2, (v / maxVal) * 100)}%"></div>
       <div class="bar-day-label">${i + 1}</div>
     </div>`).join('');
+
+  const productRows = data.rows.filter(r => !r.isDescuento);
+  const maxImporte = Math.max(...productRows.map(r => r.importe), 1);
+  document.getElementById('monthlyProductChart').innerHTML = productRows.length
+    ? productRows.map(r => `
+      <div class="hbar-row" data-product-label="${r.label}" title="${r.label}: ${money(r.importe)}">
+        <div class="hbar-label">${r.label}</div>
+        <div class="hbar-track"><div class="hbar-fill" style="width:${Math.max(1, (r.importe / maxImporte) * 100)}%"></div></div>
+        <div class="hbar-value">${money(r.importe)}</div>
+      </div>`).join('')
+    : '<p class="hbar-empty">Sin ventas en este mes.</p>';
 
   document.querySelector('#monthlyProductTable tbody').innerHTML = data.rows.length
     ? data.rows.map(r => `<tr class="row-clickable" ${r.isDescuento ? 'data-action="view-discounts-monthly"' : `data-product-label="${r.label}"`}><td>${r.label}</td><td>${num(r.cantidad, 2)}</td><td>${money(r.importe)}</td></tr>`).join('')
@@ -1696,7 +1722,7 @@ function initEvents() {
         const data = getDailyReportData(date);
         ventas = data.ventasDelDia.filter(m => m.items.some(it => it.label === label));
         subtitle = `Reporte diario — ${data.date}`;
-      } else if (productRow.closest('#monthlyProductTable')) {
+      } else if (productRow.closest('#monthlyProductTable') || productRow.closest('#monthlyProductChart')) {
         const month = document.getElementById('monthlyMonth').value || monthStr();
         const data = getMonthlyReportData(month);
         ventas = data.ventasDelMes.filter(m => m.items.some(it => it.label === label));

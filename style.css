@@ -331,15 +331,24 @@ main#app { max-width: 1100px; margin: 0 auto; padding: 20px 16px 80px; }
 .ticket-total { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-top: 1px solid var(--gridline); margin-bottom: 12px; font-size: 16px; }
 .edit-banner {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  flex-direction: column;
+  gap: 8px;
   background: color-mix(in srgb, var(--status-warning) 18%, transparent);
   border: 1px solid var(--status-warning);
   border-radius: var(--radius-sm, 8px);
   padding: 8px 10px;
   font-size: 12px;
   margin-bottom: 10px;
+}
+.edit-banner-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.edit-banner-note {
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-size: 12px;
 }
 
 /* ============ Report tabs & stats ============ */
@@ -402,6 +411,25 @@ main#app { max-width: 1100px; margin: 0 auto; padding: 20px 16px 80px; }
 }
 .bar-chart .bar-col:hover .bar-tip { display: block; }
 
+/* ============ Horizontal bar chart (monthly: venta por producto) ============ */
+.hbar-chart { display: flex; flex-direction: column; gap: 2px; }
+.hbar-row {
+  display: grid;
+  grid-template-columns: minmax(90px, 180px) 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.hbar-row:hover { background: var(--surface-sunken); }
+.hbar-label { font-size: 12px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hbar-track { background: var(--surface-sunken); border-radius: 4px; height: 14px; overflow: hidden; }
+.hbar-fill { height: 100%; background: var(--series-blue); border-radius: 4px; min-width: 3px; }
+.hbar-row:hover .hbar-fill { filter: brightness(1.15); }
+.hbar-value { font-size: 12px; font-variant-numeric: tabular-nums; color: var(--text-primary); font-weight: 600; min-width: 76px; text-align: right; }
+.hbar-empty { color: var(--text-muted); font-size: 13px; padding: 8px; }
+
 /* ============ Modal ============ */
 .modal-backdrop {
   display: none;
@@ -427,8 +455,8 @@ main#app { max-width: 1100px; margin: 0 auto; padding: 20px 16px 80px; }
 }
 .modal h3 { margin: 0 0 4px; }
 .modal .modal-sub { color: var(--text-secondary); font-size: 13px; margin: 0 0 16px; }
-.modal .modal-actions { display: flex; gap: 10px; margin-top: 18px; }
-.modal .modal-actions .btn { flex: 1; }
+.modal .modal-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+.modal .modal-actions .btn { flex: 1 1 140px; }
 .field-hint { font-size: 11px; color: var(--text-muted); }
 .warn-box {
   background: color-mix(in srgb, var(--status-warning) 14%, transparent);
