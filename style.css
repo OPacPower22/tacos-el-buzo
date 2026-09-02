@@ -218,7 +218,6 @@ main#app { max-width: 1100px; margin: 0 auto; padding: 20px 16px 80px; }
 .product-btn[data-protein="longaniza"]  { border-left: 4px solid var(--series-red); }
 .product-btn[data-protein="campechano"] { border-left: 4px solid var(--series-violet); }
 .product-btn[data-protein="arrachera"]  { border-left: 4px solid var(--series-blue); }
-.product-btn[data-protein="ribeye"]     { border-left: 4px solid var(--series-green); }
 .product-btn[data-protein="guacamole"]  { border-left: 4px solid var(--series-aqua); }
 
 /* ============ Buttons ============ */

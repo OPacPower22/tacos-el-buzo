@@ -1,6 +1,6 @@
 # Taquería POS
 
-Sistema standalone (sin instalación, sin internet, sin servidor) para llevar el control de ventas e inventario de una taquería: tacos y quesadillas de bistec, longaniza, campechano (bistec+longaniza), arrachera y rib eye, más órdenes de guacamole (150 g).
+Sistema standalone (sin instalación, sin internet, sin servidor) para llevar el control de ventas e inventario de una taquería: tacos y quesadillas de bistec, longaniza, campechano (bistec+longaniza) y arrachera, más órdenes de guacamole (150 g).
 
 ## Cómo usarlo
 
@@ -14,7 +14,7 @@ Sistema standalone (sin instalación, sin internet, sin servidor) para llevar el
 ## Pestañas del sistema
 
 - **🧾 Vender** — botones por producto y guacamole; los tacos se venden por pieza, orden (x5) o kilo, y las **quesadillas únicamente por pieza**. Cada venta descuenta **directo de la materia prima** (carne cruda y tortillas, según el gramaje configurado) — no hay un paso previo de "preparar". Tacos y quesadillas se pueden marcar "con queso extra". Cada click arma un ticket; puedes aplicar un **descuento al ticket (% o $) con nota obligatoria del motivo**; "Cobrar y registrar venta" descuenta inventario y registra la venta del día.
-- **📦 Compras** — registra entradas de materia prima (carne cruda, tortillas, guacamole, queso) cuando llega mercancía.
+- **📦 Compras** — registra entradas de materia prima (carne cruda, tortillas, guacamole, queso, queso para gratinar, aceite) cuando llega mercancía.
 - **📊 Inventario** — existencias actuales de materia prima (kg de carne, tortillas, guacamole y queso). Cada renglón tiene un botón "Ajustar" para corregir por conteo físico. El inventario se actualiza automáticamente al vender, comprar, **editar o cancelar** una venta.
 - **📈 Reportes** — reporte diario (por fecha), reporte mensual (con gráfica de ventas por día) e historial completo de movimientos. Cada reporte se puede **imprimir/guardar como PDF** o **enviar por WhatsApp como imagen** (JPG/PNG generada en el momento, sin depender de internet para crearla). Desde el historial, cualquier venta ya cobrada se puede **editar** (cambia los artículos y ajusta el inventario) o **cancelar con nota del motivo** (devuelve todo el inventario descontado); el reporte diario incluye una tabla de "Cancelaciones del día" con su nota documental.
 - **⚙️ Configuración** — precios por producto/formato, precio de guacamole, gramaje de queso extra, mezcla del campechano, gramos por pieza, tortillas por pieza (taco/quesadilla) y umbrales de alerta de stock bajo. También exportar/importar respaldo en `.json` y reiniciar datos.
@@ -40,7 +40,7 @@ Sistema standalone (sin instalación, sin internet, sin servidor) para llevar el
 ## Supuestos de diseño (ajustables en Configuración o pidiendo cambios)
 
 - **Quesadillas** se venden únicamente **por pieza** (no por orden x5 ni por kilo), y usan el mismo gramaje de carne por pieza que el taco del mismo producto.
-- **Gramos de carne cruda por pieza** (Configuración → "Gramos de carne por pieza"): verificado contra el Excel de operación (`vtas-tacos.xlsx`, hoja "Cálculo por taco") — bistec y longaniza 60 g/pieza (~16-17 tacos por kg), arrachera y rib eye 40 g/pieza (~25 tacos por kg).
+- **Gramos de carne cruda por pieza** (Configuración → "Gramos de carne por pieza"): verificado contra el Excel de operación (`vtas-tacos.xlsx`, hoja "Cálculo por taco") — bistec y longaniza 60 g/pieza (~16-17 tacos por kg), arrachera 40 g/pieza (~25 tacos por kg).
 - **Campechano** no tiene materia prima propia: al vender campechano, la carne se descuenta según la mezcla configurada (Configuración → "Campechano — mezcla por pieza"), por defecto 35 g de longaniza + 25 g de bistec por pieza (60 g totales).
 - **Queso extra**: al vender, se puede marcar "Con queso extra" — suma el precio configurado por pieza y descuenta queso rallado del inventario (por defecto 61 g y $10 por pieza).
 - **Tortillas**: se compran y se controlan por **kg** (como llegan del proveedor, a 34 g por tortilla). Cada **taco usa 2 tortillas** y cada **quesadilla usa 1 tortilla** (Configuración → "Tortillas — parámetros de conversión y alertas"); el sistema descuenta esas tortillas automáticamente en gramos al registrar la venta.

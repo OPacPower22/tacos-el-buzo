@@ -11,7 +11,6 @@ const PROTEINS = [
   { id: 'longaniza',  name: 'Longaniza',  icon: '🌭', combo: null },
   { id: 'campechano', name: 'Campechano', icon: '🔀', combo: ['bistec', 'longaniza'], sub: 'Bistec y longaniza' },
   { id: 'arrachera',  name: 'Arrachera',  icon: '🍖', combo: null },
-  { id: 'ribeye',     name: 'Rib Eye',    icon: '🥓', combo: null },
 ];
 
 const TIPOS = [
@@ -34,11 +33,12 @@ const INSUMOS = [
   { id: 'bistec',    label: 'Bistec crudo',    unit: 'kg' },
   { id: 'longaniza', label: 'Longaniza cruda', unit: 'kg' },
   { id: 'arrachera', label: 'Arrachera cruda', unit: 'kg' },
-  { id: 'ribeye',    label: 'Rib Eye crudo',   unit: 'kg' },
   { id: 'tortillas', label: 'Tortillas',       unit: 'kg' },
   { id: 'guacamole', label: 'Guacamole preparado', unit: 'kg' },
   { id: 'queso',     label: 'Queso rallado',   unit: 'kg' },
   { id: 'tortillasHarina', label: 'Tortillas de harina', unit: 'kg' },
+  { id: 'quesoGratinar', label: 'Queso para gratinar', unit: 'kg' },
+  { id: 'aceite',    label: 'Aceite',          unit: 'L' },
 ];
 
 // Insumos que se registran/capturan en kg pero se guardan internamente en gramos
@@ -66,7 +66,6 @@ function defaultPricesForProtein(id) {
     longaniza:  { taco: { pieza: 16, orden5: 75,  kilo: 230 }, quesadilla: { pieza: 26, orden5: 120, kilo: 270 } },
     campechano: { taco: { pieza: 18, orden5: 85,  kilo: 260 }, quesadilla: { pieza: 28, orden5: 130, kilo: 300 } },
     arrachera:  { taco: { pieza: 25, orden5: 120, kilo: 420 }, quesadilla: { pieza: 35, orden5: 165, kilo: 460 } },
-    ribeye:     { taco: { pieza: 30, orden5: 145, kilo: 520 }, quesadilla: { pieza: 40, orden5: 190, kilo: 560 } },
   };
   return base[id];
 }
@@ -76,14 +75,14 @@ function defaultState() {
   PROTEINS.forEach(p => { prices[p.id] = defaultPricesForProtein(p.id); });
   return {
     // tortillas y queso se guardan en gramos (como el guacamole); se compran por kg.
-    raw: { bistec: 5, longaniza: 5, arrachera: 3, ribeye: 2, tortillas: 10200, guacamole: 1500, queso: 1000, tortillasHarina: 2000 },
+    raw: { bistec: 5, longaniza: 5, arrachera: 3, tortillas: 10200, guacamole: 1500, queso: 1000, tortillasHarina: 2000, quesoGratinar: 0, aceite: 0 },
     prices,
     guacPrice: 35,
     alambrePrice: 450,
     settings: {
       // Gramos de carne cruda por pieza (taco o quesadilla), verificado contra el Excel de operación:
-      // arrachera/rib eye 40 g (~25 tacos/kg), bistec/longaniza 60 g (~16-17 tacos/kg).
-      gramosPorProducto: { bistec: 60, longaniza: 60, arrachera: 40, ribeye: 40 },
+      // arrachera 40 g (~25 tacos/kg), bistec/longaniza 60 g (~16-17 tacos/kg).
+      gramosPorProducto: { bistec: 60, longaniza: 60, arrachera: 40 },
       // El campechano combina longaniza y bistec en proporción propia (no 50/50): 60 g por pieza en total.
       campechanoLonganiza: 35,
       campechanoBistec: 25,
@@ -913,6 +912,7 @@ function handlePurchaseSubmit(e) {
   document.getElementById('purchaseUnit').textContent = INSUMOS[0].unit;
   renderPurchaseHistory();
   renderInventory();
+  renderSellGrid();
 }
 
 /* ======================================================================
@@ -931,11 +931,12 @@ function renderInventory() {
     { id: 'bistec', label: 'Bistec crudo', value: STATE.raw.bistec, unit: 'kg', threshold: s.alertaStockBajoKg },
     { id: 'longaniza', label: 'Longaniza cruda', value: STATE.raw.longaniza, unit: 'kg', threshold: s.alertaStockBajoKg },
     { id: 'arrachera', label: 'Arrachera cruda', value: STATE.raw.arrachera, unit: 'kg', threshold: s.alertaStockBajoKg },
-    { id: 'ribeye', label: 'Rib Eye crudo', value: STATE.raw.ribeye, unit: 'kg', threshold: s.alertaStockBajoKg },
     { id: 'tortillas', label: 'Tortillas', value: STATE.raw.tortillas / 1000, unit: 'kg', threshold: s.alertaTortillasKg },
     { id: 'guacamole', label: 'Guacamole preparado', value: STATE.raw.guacamole / 1000, unit: 'kg', threshold: s.alertaStockBajoKg },
     { id: 'queso', label: 'Queso rallado', value: STATE.raw.queso / 1000, unit: 'kg', threshold: s.alertaStockBajoKg },
     { id: 'tortillasHarina', label: 'Tortillas de harina', value: STATE.raw.tortillasHarina / 1000, unit: 'kg', threshold: s.alertaTortillasHarinaKg },
+    { id: 'quesoGratinar', label: 'Queso para gratinar', value: STATE.raw.quesoGratinar, unit: 'kg', threshold: s.alertaStockBajoKg },
+    { id: 'aceite', label: 'Aceite', value: STATE.raw.aceite, unit: 'L', threshold: s.alertaStockBajoKg },
   ];
   rawTbody.innerHTML = rawRows.map(r => `
     <tr>
@@ -978,6 +979,7 @@ function openAdjustRawModal(insumoId) {
       toast('Ajuste guardado');
       closeModal();
       renderInventory();
+      renderSellGrid();
     });
   });
 }
@@ -1618,6 +1620,7 @@ function initTabs() {
       document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
       btn.classList.add('active');
       document.getElementById(`panel-${btn.dataset.tab}`).classList.add('active');
+      if (btn.dataset.tab === 'vender') renderSellGrid();
       if (btn.dataset.tab === 'reportes') { renderDailyReport(); renderMonthlyReport(); renderHistory(); }
       if (btn.dataset.tab === 'inventario') renderInventory();
       if (btn.dataset.tab === 'config') { renderPricesTable(); renderGramosTable(); renderConfigMisc(); }
