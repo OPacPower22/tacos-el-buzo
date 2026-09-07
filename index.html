@@ -131,6 +131,7 @@
 
     <div class="report-tabs">
       <button class="report-tab-btn active" data-report="diario">Reporte diario</button>
+      <button class="report-tab-btn" data-report="semanal">Reporte semanal</button>
       <button class="report-tab-btn" data-report="mensual">Reporte mensual</button>
       <button class="report-tab-btn" data-report="historial">Historial de movimientos</button>
     </div>
@@ -156,6 +157,34 @@
         <h3>Cancelaciones del día (con nota documental)</h3>
         <table class="data-table" id="dailyCancelTable">
           <thead><tr><th>Hora</th><th>Detalle</th><th>Importe</th><th>Motivo</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="report-view" id="report-semanal">
+      <div class="form-row inline">
+        <label for="weeklyWeek">Semana</label>
+        <input type="week" id="weeklyWeek">
+      </div>
+      <p class="field-hint" id="weeklyRangeLabel"></p>
+      <div class="report-toolbar">
+        <button class="btn btn-secondary" data-report-action="print-semanal">🖨️ Imprimir / PDF</button>
+        <button class="btn btn-secondary" data-report-action="whatsapp-semanal">📲 Enviar por WhatsApp</button>
+      </div>
+      <div class="stat-row" id="weeklyStats"></div>
+      <div class="chart-wrap">
+        <h3>Ventas por día</h3>
+        <div id="weeklyChart" class="bar-chart"></div>
+      </div>
+      <div class="chart-wrap">
+        <h3>Venta por producto</h3>
+        <div id="weeklyProductChart" class="hbar-chart"></div>
+      </div>
+      <div class="table-wrap">
+        <h3>Totales por producto en la semana</h3>
+        <table class="data-table" id="weeklyProductTable">
+          <thead><tr><th>Producto</th><th>Piezas/Órdenes/Kg</th><th>Importe</th></tr></thead>
           <tbody></tbody>
         </table>
       </div>

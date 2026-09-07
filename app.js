@@ -168,6 +168,30 @@ function todayStr(d = new Date()) {
 function monthStr(d = new Date()) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
+// Semana ISO 8601 (lunes a domingo), compatible con el valor de <input type="week">.
+function weekStr(d = new Date()) {
+  const date = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const dayNum = (date.getDay() + 6) % 7; // lunes = 0 ... domingo = 6
+  date.setDate(date.getDate() - dayNum + 3); // jueves de esta semana ISO
+  const firstThursday = new Date(date.getFullYear(), 0, 4);
+  const firstDayNum = (firstThursday.getDay() + 6) % 7;
+  firstThursday.setDate(firstThursday.getDate() - firstDayNum + 3);
+  const week = 1 + Math.round((date - firstThursday) / (7 * 24 * 3600 * 1000));
+  return `${date.getFullYear()}-W${String(week).padStart(2, '0')}`;
+}
+// Devuelve el lunes y domingo (Date, medianoche local) de una semana "YYYY-Www".
+function weekRange(weekValue) {
+  const [yearStr, weekPart] = weekValue.split('-W');
+  const year = Number(yearStr), week = Number(weekPart);
+  const jan4 = new Date(year, 0, 4);
+  const jan4DayNum = (jan4.getDay() + 6) % 7;
+  const start = new Date(year, 0, 4 - jan4DayNum + (week - 1) * 7);
+  const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6);
+  return { start, end };
+}
+function fmtDateShort(d) {
+  return d.toLocaleDateString('es-MX', { day: '2-digit', month: '2-digit', year: 'numeric' });
+}
 function fmtDateTime(ts) {
   return new Date(ts).toLocaleString('es-MX', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
@@ -719,6 +743,7 @@ function saveEditedSale() {
   renderSellGrid();
   renderInventory();
   renderDailyReport();
+  renderWeeklyReport();
   renderMonthlyReport();
   renderHistory();
 }
@@ -752,6 +777,7 @@ function requestCancelSale(id) {
       renderSellGrid();
       renderInventory();
       renderDailyReport();
+      renderWeeklyReport();
       renderMonthlyReport();
       renderHistory();
     });
@@ -1075,6 +1101,90 @@ function cancelNotaFor(saleId) {
   return mov?.nota;
 }
 
+const DIAS_SEMANA = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+
+function getWeeklyReportData(week) {
+  const { start, end } = weekRange(week);
+  const startStr = todayStr(start), endStr = todayStr(end);
+  const enRango = m => { const d = todayStr(new Date(m.ts)); return d >= startStr && d <= endStr; };
+  const ventasDeLaSemana = STATE.movements.filter(m => m.type === 'venta' && !m.cancelled && enRango(m));
+  const canceladasDeLaSemana = STATE.movements.filter(m => m.type === 'venta' && m.cancelled && enRango(m));
+
+  const totalSemana = ventasDeLaSemana.reduce((s, m) => s + m.total, 0);
+  const porDia = Array.from({ length: 7 }, () => 0);
+  ventasDeLaSemana.forEach(m => {
+    const d = new Date(m.ts);
+    const diaLocal = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const diffDias = Math.round((diaLocal - start) / (24 * 3600 * 1000));
+    if (diffDias >= 0 && diffDias < 7) porDia[diffDias] += m.total;
+  });
+  const diasConVenta = porDia.filter(v => v > 0).length;
+  const promedioDiario = diasConVenta ? totalSemana / diasConVenta : 0;
+  const maxDia = porDia.reduce((best, v, i) => v > best.v ? { v, i } : best, { v: 0, i: -1 });
+  const totalPiezas = ventasDeLaSemana.reduce((s, m) => s + m.items.reduce((s2, it) => s2 + (it.protein === 'guacamole' || it.protein === 'alambre' ? 0 : it.cantidad), 0), 0);
+  const ventasConDescuento = ventasDeLaSemana.filter(m => m.discount);
+  const totalDescuentos = ventasConDescuento.reduce((s, m) => s + (m.discount?.amount || 0), 0);
+  const totalCanceladas = canceladasDeLaSemana.length;
+  const totalCanceladasMonto = canceladasDeLaSemana.reduce((s, m) => s + m.total, 0);
+
+  const agg = {};
+  ventasDeLaSemana.forEach(m => m.items.forEach(it => {
+    if (!agg[it.label]) agg[it.label] = { label: it.label, cantidad: 0, importe: 0 };
+    agg[it.label].cantidad += it.cantidad;
+    agg[it.label].importe += it.subtotal;
+  }));
+  const rows = Object.values(agg).sort((a, b) => b.importe - a.importe);
+  if (totalDescuentos > 0) {
+    rows.push({ label: `Descuentos otorgados (${ventasConDescuento.length})`, cantidad: ventasConDescuento.length, importe: -totalDescuentos, isDescuento: true });
+  }
+
+  return { week, start, end, totalSemana, porDia, diasConVenta, promedioDiario, maxDia, totalPiezas, totalDescuentos, totalCanceladas, totalCanceladasMonto, ventasConDescuento, ventasDeLaSemana, rows };
+}
+
+function renderWeeklyReport() {
+  const weekInput = document.getElementById('weeklyWeek');
+  const week = weekInput.value || weekStr();
+  weekInput.value = week;
+  const data = getWeeklyReportData(week);
+
+  document.getElementById('weeklyRangeLabel').textContent = `Semana del ${fmtDateShort(data.start)} al ${fmtDateShort(data.end)}`;
+
+  document.getElementById('weeklyStats').innerHTML = `
+    <div class="stat-tile"><div class="st-label">Ventas de la semana</div><div class="st-value">${money(data.totalSemana)}</div></div>
+    <div class="stat-tile"><div class="st-label">Promedio diario (días con venta)</div><div class="st-value">${money(data.promedioDiario)}</div></div>
+    <div class="stat-tile"><div class="st-label">Mejor día</div><div class="st-value">${data.maxDia.i >= 0 ? `${DIAS_SEMANA[data.maxDia.i]} — ${money(data.maxDia.v)}` : '—'}</div></div>
+    <div class="stat-tile"><div class="st-label">Piezas / porciones vendidas</div><div class="st-value">${num(data.totalPiezas)}</div></div>
+    <div class="stat-tile clickable" data-action="view-discounts-weekly" title="Ver detalle de descuentos"><div class="st-label">Descuentos otorgados</div><div class="st-value">${money(data.totalDescuentos)}</div></div>
+    <div class="stat-tile"><div class="st-label">Ventas canceladas</div><div class="st-value">${num(data.totalCanceladas)} (${money(data.totalCanceladasMonto)})</div></div>
+  `;
+
+  const maxVal = Math.max(...data.porDia, 1);
+  document.getElementById('weeklyChart').innerHTML = data.porDia.map((v, i) => {
+    const dia = new Date(data.start.getFullYear(), data.start.getMonth(), data.start.getDate() + i);
+    return `
+    <div class="bar-col">
+      <div class="bar-tip">${DIAS_SEMANA[i]} ${fmtDateShort(dia)}: ${money(v)}</div>
+      <div class="bar" style="height:${Math.max(2, (v / maxVal) * 100)}%"></div>
+      <div class="bar-day-label">${DIAS_SEMANA[i]}</div>
+    </div>`;
+  }).join('');
+
+  const productRows = data.rows.filter(r => !r.isDescuento);
+  const maxImporte = Math.max(...productRows.map(r => r.importe), 1);
+  document.getElementById('weeklyProductChart').innerHTML = productRows.length
+    ? productRows.map(r => `
+      <div class="hbar-row" data-product-label="${r.label}" title="${r.label}: ${money(r.importe)}">
+        <div class="hbar-label">${r.label}</div>
+        <div class="hbar-track"><div class="hbar-fill" style="width:${Math.max(1, (r.importe / maxImporte) * 100)}%"></div></div>
+        <div class="hbar-value">${money(r.importe)}</div>
+      </div>`).join('')
+    : '<p class="hbar-empty">Sin ventas en esta semana.</p>';
+
+  document.querySelector('#weeklyProductTable tbody').innerHTML = data.rows.length
+    ? data.rows.map(r => `<tr class="row-clickable" ${r.isDescuento ? 'data-action="view-discounts-weekly"' : `data-product-label="${r.label}"`}><td>${r.label}</td><td>${num(r.cantidad, 2)}</td><td>${money(r.importe)}</td></tr>`).join('')
+    : '<tr><td colspan="3" class="field-hint">Sin ventas en esta semana.</td></tr>';
+}
+
 function getMonthlyReportData(month) {
   const ventasDelMes = STATE.movements.filter(m => m.type === 'venta' && !m.cancelled && monthStr(new Date(m.ts)) === month);
   const canceladasDelMes = STATE.movements.filter(m => m.type === 'venta' && m.cancelled && monthStr(new Date(m.ts)) === month);
@@ -1255,6 +1365,26 @@ function printMonthlyReport() {
       <div class="print-stat"><strong>${money(data.totalMes)}</strong><span>Ventas del mes</span></div>
       <div class="print-stat"><strong>${money(data.promedioDiario)}</strong><span>Promedio diario</span></div>
       <div class="print-stat"><strong>${data.maxDia.i >= 0 ? `Día ${data.maxDia.i + 1} — ${money(data.maxDia.v)}` : '—'}</strong><span>Mejor día</span></div>
+      <div class="print-stat"><strong>${num(data.totalPiezas)}</strong><span>Piezas vendidas</span></div>
+      <div class="print-stat"><strong>${money(data.totalDescuentos)}</strong><span>Descuentos otorgados</span></div>
+      <div class="print-stat"><strong>${num(data.totalCanceladas)} (${money(data.totalCanceladasMonto)})</strong><span>Ventas canceladas</span></div>
+    </div>
+    <table class="print-table"><thead><tr><th>Producto</th><th>Cantidad</th><th>Importe</th></tr></thead><tbody>${rowsHtml}</tbody></table>
+  `);
+  printReport(html);
+}
+
+function printWeeklyReport() {
+  const week = document.getElementById('weeklyWeek').value || weekStr();
+  const data = getWeeklyReportData(week);
+  const rowsHtml = data.rows.length
+    ? data.rows.map(r => `<tr><td>${r.label}</td><td>${num(r.cantidad, 2)}</td><td>${money(r.importe)}</td></tr>`).join('')
+    : '<tr><td colspan="3">Sin ventas en esta semana.</td></tr>';
+  const html = printHtml(`Reporte semanal — ${fmtDateShort(data.start)} al ${fmtDateShort(data.end)}`, `
+    <div class="print-stats">
+      <div class="print-stat"><strong>${money(data.totalSemana)}</strong><span>Ventas de la semana</span></div>
+      <div class="print-stat"><strong>${money(data.promedioDiario)}</strong><span>Promedio diario</span></div>
+      <div class="print-stat"><strong>${data.maxDia.i >= 0 ? `${DIAS_SEMANA[data.maxDia.i]} — ${money(data.maxDia.v)}` : '—'}</strong><span>Mejor día</span></div>
       <div class="print-stat"><strong>${num(data.totalPiezas)}</strong><span>Piezas vendidas</span></div>
       <div class="print-stat"><strong>${money(data.totalDescuentos)}</strong><span>Descuentos otorgados</span></div>
       <div class="print-stat"><strong>${num(data.totalCanceladas)} (${money(data.totalCanceladasMonto)})</strong><span>Ventas canceladas</span></div>
@@ -1455,6 +1585,27 @@ function shareMonthlyReportWhatsApp() {
   shareCanvasReport(canvas, `reporte-mensual-${data.month}.png`, text);
 }
 
+function shareWeeklyReportWhatsApp() {
+  const week = document.getElementById('weeklyWeek').value || weekStr();
+  const data = getWeeklyReportData(week);
+  const canvas = buildReportCanvas({
+    title: `Reporte semanal — ${fmtDateShort(data.start)} al ${fmtDateShort(data.end)}`,
+    stats: [
+      { label: 'Ventas de la semana', value: money(data.totalSemana) },
+      { label: 'Promedio diario', value: money(data.promedioDiario) },
+      { label: 'Mejor día', value: data.maxDia.i >= 0 ? `${DIAS_SEMANA[data.maxDia.i]} — ${money(data.maxDia.v)}` : '—' },
+      { label: 'Piezas vendidas', value: num(data.totalPiezas) },
+      { label: 'Descuentos', value: money(data.totalDescuentos) },
+      { label: 'Canceladas', value: `${num(data.totalCanceladas)} (${money(data.totalCanceladasMonto)})` },
+    ],
+    columns: [{ label: 'Producto', width: 0.5 }, { label: 'Cantidad', width: 0.25 }, { label: 'Importe', width: 0.25 }],
+    rows: data.rows.map(r => [r.label, num(r.cantidad, 2), money(r.importe)]),
+    footerLines: [`Generado el ${fmtDateTime(Date.now())}`],
+  });
+  const text = `📅 *Reporte semanal — ${fmtDateShort(data.start)} al ${fmtDateShort(data.end)}*\n💰 Ventas de la semana: ${money(data.totalSemana)}\nImagen del reporte adjunta.`;
+  shareCanvasReport(canvas, `reporte-semanal-${data.week}.png`, text);
+}
+
 function shareHistoryReportWhatsApp() {
   const filter = document.getElementById('historyFilter').value;
   const from = document.getElementById('historyFrom').value;
@@ -1621,7 +1772,7 @@ function initTabs() {
       btn.classList.add('active');
       document.getElementById(`panel-${btn.dataset.tab}`).classList.add('active');
       if (btn.dataset.tab === 'vender') renderSellGrid();
-      if (btn.dataset.tab === 'reportes') { renderDailyReport(); renderMonthlyReport(); renderHistory(); }
+      if (btn.dataset.tab === 'reportes') { renderDailyReport(); renderWeeklyReport(); renderMonthlyReport(); renderHistory(); }
       if (btn.dataset.tab === 'inventario') renderInventory();
       if (btn.dataset.tab === 'config') { renderPricesTable(); renderGramosTable(); renderConfigMisc(); }
     });
@@ -1680,6 +1831,7 @@ function initEvents() {
   });
 
   document.getElementById('dailyDate').addEventListener('change', renderDailyReport);
+  document.getElementById('weeklyWeek').addEventListener('change', renderWeeklyReport);
   document.getElementById('monthlyMonth').addEventListener('change', renderMonthlyReport);
   document.getElementById('historyFilter').addEventListener('change', renderHistory);
   document.getElementById('historyFrom').addEventListener('change', renderHistory);
@@ -1696,6 +1848,8 @@ function initEvents() {
       const actions = {
         'print-diario': printDailyReport,
         'whatsapp-diario': shareDailyReportWhatsApp,
+        'print-semanal': printWeeklyReport,
+        'whatsapp-semanal': shareWeeklyReportWhatsApp,
         'print-mensual': printMonthlyReport,
         'whatsapp-mensual': shareMonthlyReportWhatsApp,
         'print-historial': printHistoryReport,
@@ -1708,6 +1862,12 @@ function initEvents() {
       const date = document.getElementById('dailyDate').value || todayStr();
       const data = getDailyReportData(date);
       openDiscountDetailModal(data.ventasConDescuento, `Reporte diario — ${data.date}`);
+      return;
+    }
+    if (e.target.closest('[data-action="view-discounts-weekly"]')) {
+      const week = document.getElementById('weeklyWeek').value || weekStr();
+      const data = getWeeklyReportData(week);
+      openDiscountDetailModal(data.ventasConDescuento, `Reporte semanal — ${fmtDateShort(data.start)} al ${fmtDateShort(data.end)}`);
       return;
     }
     if (e.target.closest('[data-action="view-discounts-monthly"]')) {
@@ -1725,6 +1885,11 @@ function initEvents() {
         const data = getDailyReportData(date);
         ventas = data.ventasDelDia.filter(m => m.items.some(it => it.label === label));
         subtitle = `Reporte diario — ${data.date}`;
+      } else if (productRow.closest('#weeklyProductTable') || productRow.closest('#weeklyProductChart')) {
+        const week = document.getElementById('weeklyWeek').value || weekStr();
+        const data = getWeeklyReportData(week);
+        ventas = data.ventasDeLaSemana.filter(m => m.items.some(it => it.label === label));
+        subtitle = `Reporte semanal — ${fmtDateShort(data.start)} al ${fmtDateShort(data.end)}`;
       } else if (productRow.closest('#monthlyProductTable') || productRow.closest('#monthlyProductChart')) {
         const month = document.getElementById('monthlyMonth').value || monthStr();
         const data = getMonthlyReportData(month);
@@ -1771,8 +1936,10 @@ function renderAll() {
   renderPurchaseHistory();
   renderInventory();
   document.getElementById('dailyDate').value = todayStr();
+  document.getElementById('weeklyWeek').value = weekStr();
   document.getElementById('monthlyMonth').value = monthStr();
   renderDailyReport();
+  renderWeeklyReport();
   renderMonthlyReport();
   renderHistory();
   renderPricesTable();
